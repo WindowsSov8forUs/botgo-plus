@@ -5,9 +5,9 @@ import (
 	"context"
 	"strconv"
 
-	"github.com/tencent-connect/botgo/dto"
-	"github.com/tencent-connect/botgo/log"
-	"github.com/tencent-connect/botgo/openapi"
+	"github.com/WindowsSov8forUs/botgo-plus/dto"
+	"github.com/WindowsSov8forUs/botgo-plus/log"
+	"github.com/WindowsSov8forUs/botgo-plus/openapi"
 )
 
 // CreateDirectMessage 创建私信频道

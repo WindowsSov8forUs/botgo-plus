@@ -3,7 +3,7 @@ package v2
 import (
 	"context"
 
-	"github.com/tencent-connect/botgo/dto"
+	"github.com/WindowsSov8forUs/botgo-plus/dto"
 )
 
 // GetMessageSetting 获取频道消息频率设置信息

@@ -8,7 +8,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/tencent-connect/botgo/log"
+	"github.com/WindowsSov8forUs/botgo-plus/log"
 )
 
 // Type token 类型

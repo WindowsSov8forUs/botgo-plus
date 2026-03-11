@@ -1,6 +1,6 @@
 package webhook
 
-import "github.com/tencent-connect/botgo/dto"
+import "github.com/WindowsSov8forUs/botgo-plus/dto"
 
 type WebHook interface {
 	// New 创建一个新的webhook实例

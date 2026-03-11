@@ -4,9 +4,9 @@ package webhook
 import (
 	"runtime"
 
-	"github.com/tencent-connect/botgo/dto"
-	"github.com/tencent-connect/botgo/event"
-	"github.com/tencent-connect/botgo/log"
+	"github.com/WindowsSov8forUs/botgo-plus/dto"
+	"github.com/WindowsSov8forUs/botgo-plus/event"
+	"github.com/WindowsSov8forUs/botgo-plus/log"
 )
 
 var (

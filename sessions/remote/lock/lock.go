@@ -7,7 +7,7 @@ import (
 	"time"
 
 	redis "github.com/go-redis/redis/v8"
-	"github.com/tencent-connect/botgo/log"
+	"github.com/WindowsSov8forUs/botgo-plus/log"
 )
 
 // ErrorNotOk redis 写失败

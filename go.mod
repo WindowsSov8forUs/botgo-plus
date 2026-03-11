@@ -1,4 +1,4 @@
-module github.com/tencent-connect/botgo
+module github.com/WindowsSov8forUs/botgo-plus
 
 go 1.21.1
 

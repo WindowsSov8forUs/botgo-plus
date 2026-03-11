@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/tencent-connect/botgo/dto"
-	imagepkg "github.com/tencent-connect/botgo/pkg/image"
-	mp4pkg "github.com/tencent-connect/botgo/pkg/mp4"
-	silkpkg "github.com/tencent-connect/botgo/pkg/silk"
+	"github.com/WindowsSov8forUs/botgo-plus/dto"
+	imagepkg "github.com/WindowsSov8forUs/botgo-plus/pkg/image"
+	mp4pkg "github.com/WindowsSov8forUs/botgo-plus/pkg/mp4"
+	silkpkg "github.com/WindowsSov8forUs/botgo-plus/pkg/silk"
 )
 
 const (

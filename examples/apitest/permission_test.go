@@ -3,7 +3,7 @@ package apitest
 import (
 	"testing"
 
-	"github.com/tencent-connect/botgo/dto"
+	"github.com/WindowsSov8forUs/botgo-plus/dto"
 )
 
 func Test_ChannelRolesPermissions(t *testing.T) {

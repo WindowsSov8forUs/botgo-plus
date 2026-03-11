@@ -3,9 +3,9 @@ package v2
 import (
 	"context"
 
-	"github.com/tencent-connect/botgo/log"
+	"github.com/WindowsSov8forUs/botgo-plus/log"
 
-	"github.com/tencent-connect/botgo/dto"
+	"github.com/WindowsSov8forUs/botgo-plus/dto"
 )
 
 // PostAudio AudioAPI 接口实现

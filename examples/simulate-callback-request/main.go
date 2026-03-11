@@ -11,10 +11,10 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/tencent-connect/botgo/dto"
-	"github.com/tencent-connect/botgo/interaction/signature"
-	"github.com/tencent-connect/botgo/token"
 	"gopkg.in/yaml.v3"
+
+	"github.com/WindowsSov8forUs/botgo-plus/dto"
+	"github.com/WindowsSov8forUs/botgo-plus/interaction/signature"
 )
 
 const host = "http://localhost"
@@ -22,46 +22,48 @@ const port = ":9000"
 const path = "/qqbot"
 const url = host + port + path
 
+type config struct {
+	AppID  uint64 `yaml:"appid"`
+	Secret string `yaml:"secret"`
+}
+
 func main() {
-	// 加载 appid 和 token
 	content, err := os.ReadFile("config.yaml")
 	if err != nil {
 		log.Fatalln("load config file failed, err:", err)
 	}
-	credentials := &token.QQBotCredentials{}
-	if err = yaml.Unmarshal(content, credentials); err != nil {
+
+	conf := &config{}
+	if err = yaml.Unmarshal(content, conf); err != nil {
 		log.Fatalln("parse config failed, err:", err)
 	}
-	log.Println("credentials:", credentials)
-	if err != nil {
-		log.Fatalln(err)
-	}
-	go simulateRequest(credentials)
+	log.Println("config loaded")
+
+	go simulateRequest(conf)
 	var ln string
-	fmt.Scanln()
-	_, _ = fmt.Sscanln("%v", ln)
+	fmt.Scanln(&ln)
 	fmt.Println("end")
 }
 
-func simulateRequest(credentials *token.QQBotCredentials) {
-	// 等待 http 服务启动
+func simulateRequest(conf *config) {
 	time.Sleep(3 * time.Second)
-	var heartbeat = &dto.WSPayload{
-		WSPayloadBase: dto.WSPayloadBase{
+
+	heartbeat := &dto.Payload{
+		PayloadBase: dto.PayloadBase{
 			OPCode: dto.WSHeartbeat,
 		},
 		Data: 123,
 	}
 	payload, _ := json.Marshal(heartbeat)
-	send(payload, credentials)
+	send(payload, conf)
 
-	var dispatchEvent = &dto.WSPayload{
-		WSPayloadBase: dto.WSPayloadBase{
-			OPCode: dto.WSDispatchEvent,
+	dispatchEvent := &dto.Payload{
+		PayloadBase: dto.PayloadBase{
+			OPCode: dto.DispatchEvent,
 			Seq:    1,
 			Type:   dto.EventMessageReactionAdd,
 		},
-		Data: dto.WSMessageReactionData{
+		Data: dto.MessageReactionData{
 			UserID:    "123",
 			ChannelID: "111",
 			GuildID:   "222",
@@ -69,23 +71,19 @@ func simulateRequest(credentials *token.QQBotCredentials) {
 				ID:   "333",
 				Type: dto.ReactionTargetTypeMsg,
 			},
-			Emoji: dto.Emoji{
-				ID:   "42",
-				Type: 1,
-			},
+			Emoji: dto.Emoji{ID: "42", Type: 1},
 		},
-		RawMessage: nil,
 	}
 	payload, _ = json.Marshal(dispatchEvent)
 	fmt.Println(string(payload))
-	send(payload, credentials)
+	send(payload, conf)
 }
 
-func send(payload []byte, credentials *token.QQBotCredentials) {
+func send(payload []byte, conf *config) {
 	header := http.Header{}
 	header.Set(signature.HeaderTimestamp, strconv.FormatUint(uint64(time.Now().Unix()), 10))
 
-	sig, err := signature.Generate(credentials.AppSecret, header, payload)
+	sig, err := signature.Generate(conf.Secret, header, payload)
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -105,8 +103,8 @@ func send(payload []byte, credentials *token.QQBotCredentials) {
 		fmt.Println(err)
 		return
 	}
-
 	defer resp.Body.Close()
-	r, _ := io.ReadAll(resp.Body)
-	fmt.Printf("receive resp: %s", string(r))
+
+	body, _ := io.ReadAll(resp.Body)
+	fmt.Printf("receive resp: %s", string(body))
 }

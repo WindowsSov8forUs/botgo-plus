@@ -1,7 +1,7 @@
 package websocket
 
 import (
-	"github.com/tencent-connect/botgo/dto"
+	"github.com/WindowsSov8forUs/botgo-plus/dto"
 )
 
 // ATMessageEventHandler 定义了一个处理 频道 AT 消息的事件处理程序。

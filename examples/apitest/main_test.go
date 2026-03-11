@@ -9,14 +9,15 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/tencent-connect/botgo"
-	"github.com/tencent-connect/botgo/openapi"
-	"github.com/tencent-connect/botgo/token"
+	"github.com/WindowsSov8forUs/botgo-plus"
+	"github.com/WindowsSov8forUs/botgo-plus/openapi"
+	"github.com/WindowsSov8forUs/botgo-plus/token"
 )
 
 var conf struct {
 	AppID  uint64 `yaml:"appid"`
 	Secret string `yaml:"secret"`
+	Token  string `yaml:"token"`
 }
 var api openapi.OpenAPI
 
@@ -36,17 +37,18 @@ func TestMain(m *testing.M) {
 	ctx = context.Background()
 	content, err := os.ReadFile("./config.yaml")
 	if err != nil {
-		log.Println("read conf failed")
-		os.Exit(1)
+		log.Println("read conf failed, skip apitest:", err)
+		os.Exit(0)
 	}
-	credentials := &token.QQBotCredentials{}
-	if err := yaml.Unmarshal(content, credentials); err != nil {
-		log.Println(err)
-		os.Exit(1)
+	if err := yaml.Unmarshal(content, &conf); err != nil {
+		log.Println("parse conf failed, skip apitest:", err)
+		os.Exit(0)
 	}
-	log.Println(credentials)
-	appid := credentials.AppID
-	tokenSource := token.NewQQBotTokenSource(credentials)
-	api = botgo.NewOpenAPI(appid, tokenSource).WithTimeout(3 * time.Second)
+	tk := token.BotToken(conf.AppID, conf.Secret, conf.Token, token.TypeQQBot)
+	if err := tk.InitToken(ctx); err != nil {
+		log.Println("init token failed, skip apitest:", err)
+		os.Exit(0)
+	}
+	api = botgo.NewOpenAPI(tk).WithTimeout(3 * time.Second)
 	os.Exit(m.Run())
 }

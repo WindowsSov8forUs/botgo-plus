@@ -5,45 +5,41 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"strings"
 	"time"
 
-	"github.com/tencent-connect/botgo/dto"
-	"github.com/tencent-connect/botgo/openapi"
+	"github.com/WindowsSov8forUs/botgo-plus/dto"
+	"github.com/WindowsSov8forUs/botgo-plus/openapi"
 )
 
-// Processor is a struct to process message
+// Processor processes webhook events.
 type Processor struct {
 	api openapi.OpenAPI
 }
 
-// ProcessChannelMessage is a function to process message
-func (p Processor) ProcessChannelMessage(input string, data *dto.WSATMessageData) error {
+func (p Processor) ProcessChannelMessage(input string, data *dto.ATMessageData) error {
 	msg := generateDemoMessage(input, dto.Message(*data))
 	if err := p.sendChannelReply(context.Background(), data.ChannelID, msg); err != nil {
-		_ = p.sendChannelReply(context.Background(), data.GroupID, genErrMessage(dto.Message(*data), err))
+		_ = p.sendChannelReply(context.Background(), data.ChannelID, genErrMessage(dto.Message(*data), err))
 	}
 	return nil
 }
 
-// ProcessInlineSearch is a function to process inline search
-func (p Processor) ProcessInlineSearch(interaction *dto.WSInteractionData) error {
+func (p Processor) ProcessInlineSearch(interaction *dto.InteractionEventData) error {
+	if interaction == nil || interaction.Data == nil {
+		return fmt.Errorf("empty interaction")
+	}
 	if interaction.Data.Type != dto.InteractionDataTypeChatSearch {
 		return fmt.Errorf("interaction data type not chat search")
 	}
-	search := &dto.SearchInputResolved{}
-	if err := json.Unmarshal(interaction.Data.Resolved, search); err != nil {
-		log.Println(err)
-		return err
-	}
-	if search.Keyword != "test" {
+	if interaction.Data.Resolved.ButtonData != "" && interaction.Data.Resolved.ButtonData != "test" {
 		return fmt.Errorf("resolved search key not allowed")
 	}
+
 	searchRsp := &dto.SearchRsp{
 		Layouts: []dto.SearchLayout{
 			{
-				LayoutType: 0,
-				ActionType: 0,
+				LayoutType: dto.LayoutTypeImageText,
+				ActionType: dto.ActionTypeSendARK,
 				Title:      "内联搜索",
 				Records: []dto.SearchRecord{
 					{
@@ -58,7 +54,7 @@ func (p Processor) ProcessInlineSearch(interaction *dto.WSInteractionData) error
 	}
 	body, _ := json.Marshal(searchRsp)
 	if err := p.api.PutInteraction(context.Background(), interaction.ID, string(body)); err != nil {
-		log.Println("api call putInteractionInlineSearch  error: ", err)
+		log.Println("api call putInteractionInlineSearch error:", err)
 		return err
 	}
 	return nil
@@ -69,7 +65,6 @@ func genErrMessage(data dto.Message, err error) *dto.MessageToCreate {
 		Timestamp: time.Now().UnixMilli(),
 		Content:   fmt.Sprintf("处理异常:%v", err),
 		MessageReference: &dto.MessageReference{
-			// 引用这条消息
 			MessageID:             data.ID,
 			IgnoreGetMessageError: true,
 		},
@@ -77,18 +72,23 @@ func genErrMessage(data dto.Message, err error) *dto.MessageToCreate {
 	}
 }
 
-// ProcessGroupMessage 回复群消息
-func (p Processor) ProcessGroupMessage(input string, data *dto.WSGroupATMessageData) error {
+func (p Processor) ProcessGroupMessage(input string, data *dto.GroupATMessageData) error {
 	msg := generateDemoMessage(input, dto.Message(*data))
+	rich := dto.RichMediaMessage{
+		EventID:  data.ID,
+		FileType: 1,
+		URL:      "https://q.qlogo.cn/headimg_dl?dst_uin=1094950020&spec=640",
+	}
+	if err := p.sendGroupReply(context.Background(), data.GroupID, rich); err != nil {
+		_ = p.sendGroupReply(context.Background(), data.GroupID, genErrMessage(dto.Message(*data), err))
+	}
 	if err := p.sendGroupReply(context.Background(), data.GroupID, msg); err != nil {
 		_ = p.sendGroupReply(context.Background(), data.GroupID, genErrMessage(dto.Message(*data), err))
 	}
-
 	return nil
 }
 
-// ProcessC2CMessage 回复C2C消息
-func (p Processor) ProcessC2CMessage(input string, data *dto.WSC2CMessageData) error {
+func (p Processor) ProcessC2CMessage(input string, data *dto.C2CMessageData) error {
 	userID := ""
 	if data.Author != nil && data.Author.ID != "" {
 		userID = data.Author.ID
@@ -106,48 +106,16 @@ func generateDemoMessage(input string, data dto.Message) *dto.MessageToCreate {
 	if len(input) > 0 {
 		msg += "收到:" + input
 	}
-	for _, _v := range data.Attachments {
-		msg += ",收到文件类型:" + _v.ContentType
+	for _, attachment := range data.Attachments {
+		msg += ",收到文件类型:" + attachment.ContentType
 	}
 	return &dto.MessageToCreate{
 		Timestamp: time.Now().UnixMilli(),
 		Content:   msg,
 		MessageReference: &dto.MessageReference{
-			// 引用这条消息
 			MessageID:             data.ID,
 			IgnoreGetMessageError: true,
 		},
 		MsgID: data.ID,
 	}
-}
-
-// ProcessFriend 处理 c2c 好友事件
-func (p Processor) ProcessFriend(wsEventType string, data *dto.WSC2CFriendData) error {
-	// 请注意，这里是主动推送添加好友事件，后续改为 event id 被动消息
-	replyMsg := dto.MessageToCreate{
-		Timestamp: time.Now().UnixMilli(),
-		Content:   "",
-	}
-	var content string
-	switch strings.ToLower(wsEventType) {
-	case strings.ToLower(string(dto.EventC2CFriendAdd)):
-		log.Println("添加好友")
-		content = fmt.Sprintf("ID为 %s 的用户添加机器人为好友", data.OpenID)
-	case strings.ToLower(string(dto.EventC2CFriendDel)):
-		log.Println("删除好友")
-	default:
-		log.Println(wsEventType)
-		return nil
-	}
-	replyMsg.Content = content
-	_, err := p.api.PostC2CMessage(
-		context.Background(),
-		data.OpenID,
-		replyMsg,
-	)
-	if err != nil {
-		log.Println(err)
-		return err
-	}
-	return nil
 }

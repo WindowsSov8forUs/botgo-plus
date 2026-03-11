@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tencent-connect/botgo/log"
+	"github.com/WindowsSov8forUs/botgo-plus/log"
 )
 
 // getAccessTokenURL 取得AccessToken的地址

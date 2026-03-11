@@ -6,11 +6,11 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/tencent-connect/botgo/dto"
-	"github.com/tencent-connect/botgo/event"
-	"github.com/tencent-connect/botgo/interaction/signature"
-	"github.com/tencent-connect/botgo/log"
-	"github.com/tencent-connect/botgo/openapi"
+	"github.com/WindowsSov8forUs/botgo-plus/dto"
+	"github.com/WindowsSov8forUs/botgo-plus/event"
+	"github.com/WindowsSov8forUs/botgo-plus/interaction/signature"
+	"github.com/WindowsSov8forUs/botgo-plus/log"
+	"github.com/WindowsSov8forUs/botgo-plus/openapi"
 )
 
 type ack struct {

@@ -17,10 +17,10 @@ import (
 
 	"github.com/gin-gonic/gin" // Gin 是一个高性能的 HTTP Web 框架
 
-	"github.com/tencent-connect/botgo/dto"
-	"github.com/tencent-connect/botgo/event"
-	"github.com/tencent-connect/botgo/log"
-	"github.com/tencent-connect/botgo/webhook"
+	"github.com/WindowsSov8forUs/botgo-plus/dto"
+	"github.com/WindowsSov8forUs/botgo-plus/event"
+	"github.com/WindowsSov8forUs/botgo-plus/log"
+	"github.com/WindowsSov8forUs/botgo-plus/webhook"
 )
 
 // DefaultQueueSize 监听队列的缓冲长度

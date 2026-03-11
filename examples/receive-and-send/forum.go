@@ -3,13 +3,13 @@ package main
 import (
 	"fmt"
 
-	"github.com/tencent-connect/botgo/dto"
-	"github.com/tencent-connect/botgo/event"
+	"github.com/WindowsSov8forUs/botgo-plus/dto"
+	"github.com/WindowsSov8forUs/botgo-plus/event"
 )
 
-// ThreadEventHandler 论坛主贴事件
+// ThreadEventHandler handles forum thread events.
 func ThreadEventHandler() event.ThreadEventHandler {
-	return func(event *dto.WSPayload, data *dto.WSThreadData) error {
+	return func(event *dto.Payload, data *dto.ThreadData) error {
 		fmt.Println(event, data)
 		return nil
 	}

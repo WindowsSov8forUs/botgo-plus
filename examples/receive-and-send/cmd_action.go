@@ -4,7 +4,7 @@ import (
 	"context"
 	"log"
 
-	"github.com/tencent-connect/botgo/dto"
+	"github.com/WindowsSov8forUs/botgo-plus/dto"
 )
 
 func (p Processor) setEmoji(ctx context.Context, channelID string, messageID string) {
@@ -26,7 +26,7 @@ func (p Processor) setPins(ctx context.Context, channelID, msgID string) {
 	}
 }
 
-func (p Processor) setAnnounces(ctx context.Context, data *dto.WSATMessageData) {
+func (p Processor) setAnnounces(ctx context.Context, data *dto.ATMessageData) {
 	if _, err := p.api.CreateChannelAnnounces(
 		ctx, data.ChannelID,
 		&dto.ChannelAnnouncesToCreate{MessageID: data.ID},

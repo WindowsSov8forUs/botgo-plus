@@ -10,10 +10,10 @@ import (
 	"github.com/go-resty/resty/v2"
 	"github.com/tidwall/gjson"
 
-	"github.com/tencent-connect/botgo/dto"
-	"github.com/tencent-connect/botgo/errs"
-	"github.com/tencent-connect/botgo/openapi"
-	"github.com/tencent-connect/botgo/pkg/fileadapt"
+	"github.com/WindowsSov8forUs/botgo-plus/dto"
+	"github.com/WindowsSov8forUs/botgo-plus/errs"
+	"github.com/WindowsSov8forUs/botgo-plus/openapi"
+	"github.com/WindowsSov8forUs/botgo-plus/pkg/fileadapt"
 )
 
 // Message 拉取单条消息

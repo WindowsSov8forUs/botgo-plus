@@ -3,7 +3,7 @@ package dto
 import (
 	"fmt"
 
-	"github.com/tencent-connect/botgo/token"
+	"github.com/WindowsSov8forUs/botgo-plus/token"
 )
 
 // WebsocketAP wss 接入点信息

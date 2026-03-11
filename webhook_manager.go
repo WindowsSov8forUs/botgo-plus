@@ -1,8 +1,8 @@
 package botgo
 
 import (
-	"github.com/tencent-connect/botgo/dto"
-	"github.com/tencent-connect/botgo/sessions/local"
+	"github.com/WindowsSov8forUs/botgo-plus/dto"
+	"github.com/WindowsSov8forUs/botgo-plus/sessions/local"
 )
 
 // defaultWebhookManager 默认实现的 webhook manager 为本地版本

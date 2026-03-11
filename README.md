@@ -1,6 +1,6 @@
-﻿# BotGo Plus
+# BotGo Plus
 
-基于 `github.com/tencent-connect/botgo` 的增强版 SDK。
+基于 `github.com/WindowsSov8forUs/botgo-plus` 的增强版 SDK。
 
 本库最初作为 `WindowsSov8forUs/GlycCat` 的内部库使用，现已独立维护，并补充了富媒体格式适配能力（image/mp4/silk）。
 
@@ -25,9 +25,9 @@ import (
     "log"
     "time"
 
-    "github.com/tencent-connect/botgo"
-    "github.com/tencent-connect/botgo/openapi"
-    "github.com/tencent-connect/botgo/token"
+    "github.com/WindowsSov8forUs/botgo-plus"
+    "github.com/WindowsSov8forUs/botgo-plus/openapi"
+    "github.com/WindowsSov8forUs/botgo-plus/token"
 )
 
 func main() {
@@ -65,11 +65,11 @@ import (
     "context"
     "log"
 
-    "github.com/tencent-connect/botgo"
-    "github.com/tencent-connect/botgo/dto"
-    "github.com/tencent-connect/botgo/event"
-    "github.com/tencent-connect/botgo/token"
-    "github.com/tencent-connect/botgo/websocket"
+    "github.com/WindowsSov8forUs/botgo-plus"
+    "github.com/WindowsSov8forUs/botgo-plus/dto"
+    "github.com/WindowsSov8forUs/botgo-plus/event"
+    "github.com/WindowsSov8forUs/botgo-plus/token"
+    "github.com/WindowsSov8forUs/botgo-plus/websocket"
 )
 
 func main() {
@@ -105,10 +105,10 @@ package main
 import (
     "log"
 
-    "github.com/tencent-connect/botgo"
-    "github.com/tencent-connect/botgo/dto"
-    "github.com/tencent-connect/botgo/event"
-    "github.com/tencent-connect/botgo/webhook"
+    "github.com/WindowsSov8forUs/botgo-plus"
+    "github.com/WindowsSov8forUs/botgo-plus/dto"
+    "github.com/WindowsSov8forUs/botgo-plus/event"
+    "github.com/WindowsSov8forUs/botgo-plus/webhook"
 )
 
 func main() {

@@ -1,7 +1,7 @@
 package websocket
 
 import (
-	"github.com/tencent-connect/botgo/dto"
+	"github.com/WindowsSov8forUs/botgo-plus/dto"
 )
 
 // WebSocket 需要实现的接口

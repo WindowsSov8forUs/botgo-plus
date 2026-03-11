@@ -3,7 +3,7 @@ package v2
 import (
 	"context"
 
-	"github.com/tencent-connect/botgo/dto"
+	"github.com/WindowsSov8forUs/botgo-plus/dto"
 )
 
 // Guild 拉取频道信息
