@@ -2,11 +2,11 @@
 
 基于 `github.com/tencent-connect/botgo` 的增强版 SDK。
 
-本仓库已经合并 `WindowsSov8forUs/GlycCat` 项目中 `pkg/botgo` 的主要改动，并在此基础上补充了富媒体格式适配能力（image/mp4/silk）。
+本库最初作为 `WindowsSov8forUs/GlycCat` 的内部库使用，现已独立维护，并补充了富媒体格式适配能力（image/mp4/silk）。
 
 ## 改动来源
 
-本项目中的以下能力，来源于 `WindowsSov8forUs/GlycCat`（`pkg/botgo`）并已迁移：
+本项目中的以下能力，来源于 `WindowsSov8forUs/GlycCat`（`pkg/botgo`）的内部实现沉淀：
 
 - OpenAPI `v1` + `v2` 双版本实现
 - `WebhookManager` 与 webhook server 实现
@@ -164,22 +164,6 @@ func main() {
 
 - 视频/音频转换依赖本机 `ffmpeg`
 - silk 编解码器位于 `pkg/silk/exec/`
-
-## 与 GlycCat 的迁移说明
-
-如果你在外部项目（例如 `GlycCat`）里原本使用：
-
-```go
-replace github.com/tencent-connect/botgo => ./pkg/botgo
-```
-
-可以改为：
-
-```go
-replace github.com/tencent-connect/botgo => /path/to/botgo-plus
-```
-
-在 `GlycCat` 的常见调用方式（`token.BotToken`、`botgo.NewOpenAPI`、`botgo.NewSessionManager`、`botgo.NewWebhookManager`）可直接复用，无需改业务调用代码。
 
 ## Redis 说明
 
