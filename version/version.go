@@ -7,8 +7,8 @@ import (
 
 const (
 	// version sdk 版本
-	version = "v0.0.1"
-	sdkName = "BotGoSDK"
+	version = "v1.0.0"
+	sdkName = "BotGoPlusSDK"
 )
 
 // String 输出版本号
