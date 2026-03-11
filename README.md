@@ -1,101 +1,197 @@
-# BotGo
+﻿# BotGo Plus
 
-QQ频道机器人，官方 GOLANG SDK。
+基于 `github.com/tencent-connect/botgo` 的增强版 SDK。
 
-![Build](https://github.com/tencent-connect/botgo/actions/workflows/build.yml/badge.svg)
-[![Go Reference](https://pkg.go.dev/badge/github.com/tencent-connect/botgo.svg)](https://pkg.go.dev/github.com/tencent-connect/botgo)
-[![Examples](https://img.shields.io/badge/BotGo-examples-yellowgreen)](https://github.com/tencent-connect/botgo/tree/master/examples)
+本仓库已经合并 `WindowsSov8forUs/GlycCat` 项目中 `pkg/botgo` 的主要改动，并在此基础上补充了富媒体格式适配能力（image/mp4/silk）。
 
+## 改动来源
 
-## 一、如何使用
+本项目中的以下能力，来源于 `WindowsSov8forUs/GlycCat`（`pkg/botgo`）并已迁移：
 
-### 1.请求 openapi 接口，操作资源
+- OpenAPI `v1` + `v2` 双版本实现
+- `WebhookManager` 与 webhook server 实现
+- 新版 token 结构（`token.BotToken(appID, appSecret, token, token.TypeQQBot)`）
+- 本地/多实例会话管理能力（默认本地，不依赖 Redis）
 
-```golang
+## 快速开始
+
+### 1. 创建 Token 与 OpenAPI 客户端
+
+```go
+package main
+
+import (
+    "context"
+    "log"
+    "time"
+
+    "github.com/tencent-connect/botgo"
+    "github.com/tencent-connect/botgo/openapi"
+    "github.com/tencent-connect/botgo/token"
+)
+
 func main() {
-    token := token.BotToken(conf.AppID, conf.Token)
-    api := botgo.NewOpenAPI(token).WithTimeout(3 * time.Second)
     ctx := context.Background()
 
-    ws, err := api.WS(ctx, nil, "")
-    log.Printf("%+v, err:%v", ws, err)
-    
-    me, err := api.Me(ctx, nil, "")
-    log.Printf("%+v, err:%v", me, err)
+    tk := token.BotToken(
+        1234567890,          // appID
+        "app-secret",       // appSecret
+        "bot-token",        // bot token
+        token.TypeQQBot,
+    )
+    if err := tk.InitToken(ctx); err != nil {
+        log.Fatal(err)
+    }
+
+    if err := botgo.SelectOpenAPIVersion(openapi.APIv2); err != nil {
+        log.Fatal(err)
+    }
+
+    api := botgo.NewOpenAPI(tk).WithTimeout(10 * time.Second)
+    me, err := api.Me(ctx)
+    if err != nil {
+        log.Fatal(err)
+    }
+    log.Printf("bot user: %+v", me)
 }
 ```
 
-### 2.使用默认 SessionManager 启动 websocket 连接，接收事件
+### 2. WebSocket 模式
 
-```golang
+```go
+package main
+
+import (
+    "context"
+    "log"
+
+    "github.com/tencent-connect/botgo"
+    "github.com/tencent-connect/botgo/dto"
+    "github.com/tencent-connect/botgo/event"
+    "github.com/tencent-connect/botgo/token"
+    "github.com/tencent-connect/botgo/websocket"
+)
+
 func main() {
-    token := token.BotToken(conf.AppID, conf.Token)
-    api := botgo.NewOpenAPI(token).WithTimeout(3 * time.Second)
     ctx := context.Background()
-    ws, err := api.WS(ctx, nil, "")
+    tk := token.BotToken(1234567890, "app-secret", "bot-token", token.TypeQQBot)
+    _ = tk.InitToken(ctx)
+
+    api := botgo.NewOpenAPI(tk)
+    wsInfo, err := api.WS(ctx, nil, "")
     if err != nil {
-        log.Printf("%+v, err:%v", ws, err)
+        log.Fatal(err)
     }
 
-    // 监听哪类事件就需要实现哪类的 handler，定义：websocket/event_handler.go
-    var atMessage websocket.ATMessageEventHandler = func(event *dto.Payload, data *dto.ATMessageData) error {
-        log.Println(event, data)
+    var atHandler event.ATMessageEventHandler = func(evt *dto.Payload, data *dto.ATMessageData) error {
+        log.Printf("AT message: %s", data.Content)
         return nil
     }
-    intent := websocket.RegisterHandlers(atMessage)
-    // 启动 session manager 进行 ws 连接的管理，如果接口返回需要启动多个 shard 的连接，这里也会自动启动多个
-    botgo.NewSessionManager().Start(ws, token, &intent)
+
+    intent := websocket.RegisterHandlers(atHandler)
+    if err := botgo.NewSessionManager().Start(wsInfo, tk, &intent); err != nil {
+        log.Fatal(err)
+    }
 }
 ```
 
-## 二、什么是 SessionManager
+## Webhook 使用（重点）
 
-SessionManager，用于管理 websocket 连接的启动，重连等。接口定义在：`session_manager.go`。开发者也可以自己实现自己的 SessionManager。
+`WebhookManager.Start` 是阻塞调用，通常建议在 goroutine 中启动。
 
-sdk 中实现了两个 SessionManager
+```go
+package main
 
-- [local](./sessions/local/local.go) 用于在单机上启动多个 shard 的连接。下文用 `local` 代表
-- [remote](./sessions/remote/remote.go) 基于 redis 的 list 数据结构，实现分布式的 shard 管理，可以在多个节点上启动多个服务进程。下文用 `remote` 代表
+import (
+    "log"
 
-另外，也有其他同事基于 etcd 实现了 shard 集群的管理，在 [botgo-plugns](https://github.com/tencent-connect/botgo-plugins) 中。
+    "github.com/tencent-connect/botgo"
+    "github.com/tencent-connect/botgo/dto"
+    "github.com/tencent-connect/botgo/event"
+    "github.com/tencent-connect/botgo/webhook"
+)
 
-## 三、生产环境中的一些建议
+func main() {
+    var groupHandler event.GroupATMessageEventHandler = func(evt *dto.Payload, data *dto.GroupATMessageData) error {
+        log.Printf("group at message: %s", data.Content)
+        return nil
+    }
 
-得益于 websocket 的机制，我们可以在本地就启动一个机器人，实现相关逻辑，但是在生产环境中需要考虑扩容，容灾等情况，所以建
-议从以下几方面考虑生产环境的部署：
+    // 兼容入口，内部等价于 event.RegisterHandlers(...)
+    webhook.RegisterHandlers(groupHandler)
 
-### 1.公域机器人，优先使用分布式 shard 管理
+    cfg := &dto.Config{
+        Host:      "0.0.0.0",
+        Port:      9000,
+        Path:      "/qqbot/callback",
+        AppId:     1234567890,
+        BotSecret: "app-secret",
+    }
 
-使用上面提到的分布式的 session manager 或者自己实现一个分布式的 session manager
+    go func() {
+        if err := botgo.NewWebhookManager().Start(cfg); err != nil {
+            log.Printf("webhook stopped: %v", err)
+        }
+    }()
 
-### 2.提前规划好分片
+    select {}
+}
+```
 
-分布式 SessionManager 需要解决的最大的问题，就是如何解决 shard 随时增加的问题，类似 kafka 的 rebalance 问题一样，
-由于 shard 是基于频道 id 来进行 hash 的，所以在扩容的时候所有的数据都会被重新 hash。
+### Webhook 配置要点
 
-提前规划好较多的分片，如 20 个分片，有助于在未来机器人接入的频道过多的时候，能够更加平滑的进行实例的扩容。比如如果使用的
-是 `remote`，初始化时候分 20 个分片，但是只启动 2 个进程，那么这2个进程将争抢 20 个分片的消费权，进行消费，当启动更多
-的实例之后，伴随着 websocket 要求一定时间进行一次重连，启动的新实例将会平滑的分担分片的数据处理。
+- 必须先注册事件处理器，再启动 `WebhookManager`。
+- 平台配置的回调地址要与 `Host/Port/Path` 对应。
+- 对外建议通过 HTTPS 反向代理暴露 webhook（SDK 内置 HTTP 服务，不直接处理 TLS 证书）。
+- SDK 会校验回调签名和 `X-Bot-Appid`。
 
-### 3.接入和逻辑分离
+## 富媒体格式适配扩展
 
-接入是指从机器人平台收到事件的服务。逻辑是指处理相关事件的服务。
+本仓库新增了文件类型适配层，已接入：
 
-接入与逻辑分离，有助于提升机器人的事件处理效率和可靠性。一般实现方式类似于以下方案：
+- `openapi/v1` 和 `openapi/v2` 的 `PostGroupMessage` / `PostC2CMessage`
 
-- 接入层：负责维护与平台的 websocket 连接，并接收相关事件，生产到 kafka 等消息中间件中。
-  如果使用 `local` 那么可能还涉及到分布式锁的问题。可以使用sdk 中的 `sessions/remote/lock` 快速基于 redis 实现分布式锁。
+行为说明：
 
-- 逻辑层：从 kafka 消费到事件，并进行对应的处理，或者调用机器人的 openapi 进行相关数据的操作。
+- 仅当消息类型为 `RichMediaMessage` 且包含 `file_data` 时触发。
+- 按 `file_type` 自动适配：
+- `1` 图片：转为平台支持的图片格式（png/jpg/gif）
+- `2` 视频：转为 mp4（H264/AAC）
+- `3` 语音：转为 silk（已支持 amr/silk 直传）
+- 若源文件已是支持格式，不会重复转换。
 
-提前规划好 kafka 的分片，然后从容的针对逻辑层做水平扩容。或者使用 pulsar（腾讯云上叫 tdmq） 来替代 kafka 避免 rebalance 问题。
+依赖说明：
 
-## 四、SDK 开发说明
+- 视频/音频转换依赖本机 `ffmpeg`
+- silk 编解码器位于 `pkg/silk/exec/`
 
-请查看：[开发说明](./DEVELOP.md)
+## 与 GlycCat 的迁移说明
 
-## 五、加入官方社区
+如果你在外部项目（例如 `GlycCat`）里原本使用：
 
-欢迎扫码加入 **QQ 频道开发者社区**。
+```go
+replace github.com/tencent-connect/botgo => ./pkg/botgo
+```
 
-![开发者社区](https://mpqq.gtimg.cn/privacy/qq_guild_developer.png)
+可以改为：
+
+```go
+replace github.com/tencent-connect/botgo => /path/to/botgo-plus
+```
+
+在 `GlycCat` 的常见调用方式（`token.BotToken`、`botgo.NewOpenAPI`、`botgo.NewSessionManager`、`botgo.NewWebhookManager`）可直接复用，无需改业务调用代码。
+
+## Redis 说明
+
+- 默认 `SessionManager` 为本地实现，不依赖 Redis。
+- Redis 仅用于 `sessions/remote` 分布式场景。
+- Redis 相关测试默认跳过；设置 `BOTGO_REDIS_TEST=1` 才会执行。
+
+## 开发
+
+- 开发说明见 [DEVELOP.md](./DEVELOP.md)
+- 基础自测命令：
+
+```bash
+go test ./...
+```
