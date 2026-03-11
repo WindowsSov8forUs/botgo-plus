@@ -1,4 +1,3 @@
-// Package search 模拟内联搜索
 package search
 
 import (
@@ -31,7 +30,7 @@ func SimulateSearch(config *Config, keyword string) (*dto.SearchRsp, error) {
 		Name: "search",
 		Type: dto.InteractionDataTypeChatSearch,
 	}
-	interactionData.Resolved, _ = json.Marshal(dto.SearchInputResolved{Keyword: keyword})
+	//interactionData.Resolved, _ = json.Marshal(dto.SearchInputResolved{Keyword: keyword})
 	interaction := &dto.Interaction{
 		ApplicationID: config.AppID,
 		Type:          dto.InteractionTypeCommand,
@@ -56,7 +55,7 @@ func SimulateSearch(config *Config, keyword string) (*dto.SearchRsp, error) {
 	}
 	req.Header.Set(signature.HeaderTimestamp, timestamp)
 	req.Header.Set(signature.HeaderSig, sig)
-	log.Info(req)
+	log.Debug(req)
 
 	// parse resp
 	client := http.Client{}
@@ -64,7 +63,7 @@ func SimulateSearch(config *Config, keyword string) (*dto.SearchRsp, error) {
 	if err != nil {
 		return nil, err
 	}
-	log.Info(resp)
+	log.Debug(resp)
 	defer func() {
 		resp.Body.Close()
 	}()
@@ -74,7 +73,7 @@ func SimulateSearch(config *Config, keyword string) (*dto.SearchRsp, error) {
 	if err != nil {
 		return nil, err
 	}
-	log.Info(string(body))
+	log.Debug(string(body))
 	result := &dto.SearchRsp{}
 	if err = json.Unmarshal(body, result); err != nil {
 		return nil, err

@@ -1,7 +1,7 @@
 package event
 
 import (
-	"fmt"
+	"log"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -9,23 +9,23 @@ import (
 )
 
 func TestRegisterHandlers(t *testing.T) {
-	var guild GuildEventHandler = func(event *dto.WSPayload, data *dto.WSGuildData) error {
+	var guild GuildEventHandler = func(event *dto.Payload, data *dto.GuildData) error {
 		return nil
 	}
-	var message MessageEventHandler = func(event *dto.WSPayload, data *dto.WSMessageData) error {
+	var message MessageEventHandler = func(event *dto.Payload, data *dto.MessageData) error {
 		return nil
 	}
-	var audio AudioEventHandler = func(event *dto.WSPayload, data *dto.WSAudioData) error {
+	var audio AudioEventHandler = func(event *dto.Payload, data *dto.AudioData) error {
 		return nil
 	}
 
 	t.Run(
 		"test intent", func(t *testing.T) {
 			i := RegisterHandlers(guild, message, audio)
-			fmt.Println(i)
+			log.Println(i)
 			assert.Equal(t, dto.IntentGuildMessages, i&dto.IntentGuildMessages)
 			assert.Equal(t, dto.IntentGuilds, i&dto.IntentGuilds)
-			assert.Equal(t, dto.IntentAudio, i&dto.IntentAudio)
+			assert.Equal(t, dto.IntentAudioAction, i&dto.IntentAudioAction)
 		},
 	)
 }

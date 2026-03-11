@@ -7,7 +7,7 @@ import (
 
 const (
 	// version sdk 版本
-	version = "v0.0.2"
+	version = "v0.0.1"
 	sdkName = "BotGoSDK"
 )
 

@@ -39,12 +39,61 @@ type Message struct {
 	MessageReference *MessageReference `json:"message_reference,omitempty"`
 	// 私信场景下，该字段用来标识从哪个频道发起的私信
 	SrcGuildID string `json:"src_guild_id"`
-	// 上传富媒体文件后返回的文件信息。 注意以群或者C2C消息上传后， 同类型可以重复使用，不同类型需要不能使用。
-	FileInfo []byte `json:"file_info,omitempty"`
-	// 上传富媒体文件后的有效期, 单位:秒, 在有效期内可以重复使用。
-	TTL uint `json:"ttl,omitempty"`
-	// 消息场景描述
-	MessageScene MessageScene `json:"message_scene,omitempty"`
+	//返回的ret 超过主动限制会返回22009
+	Ret int `json:"ret,omitempty"`
+}
+
+// Forum 消息结构体定义
+type Forum struct {
+	// 消息ID
+	TaskId string `json:"task_id"`
+	// 发送时间 秒级时间戳
+	CreateTime string `json:"create_time"`
+}
+
+// GroupAddBotEvent 表示群添加机器人事件的数据结构
+type GroupAddBotEvent struct {
+	ID             string `json:"id"`
+	EventID        string `json:"event_id"`
+	GroupOpenID    string `json:"group_openid"`
+	OpMemberOpenID string `json:"op_member_openid"`
+	Timestamp      int64  `json:"timestamp"`
+}
+
+type GroupMsgRejectEvent struct {
+	EventID        string      `json:"event_id"`
+	GroupOpenID    string      `json:"group_openid"`
+	OpMemberOpenID string      `json:"op_member_openid"`
+	Timestamp      interface{} `json:"timestamp"`
+}
+
+type GroupMsgReceiveEvent struct {
+	EventID        string      `json:"event_id"`
+	GroupOpenID    string      `json:"group_openid"`
+	OpMemberOpenID string      `json:"op_member_openid"`
+	Timestamp      interface{} `json:"timestamp"`
+}
+
+type MediaResponse struct {
+	//UUID
+	FileUUID string `json:"file_uuid"`
+	//file_info
+	FileInfo string `json:"file_info"`
+	TTL      int    `json:"ttl"`
+	//返回的ret 超过主动限制会返回22009
+	Ret int `json:"ret,omitempty"`
+}
+
+// 群信息结构
+type GroupMessageResponse struct {
+	MediaResponse *MediaResponse
+	Message       *Message
+}
+
+// C2CMessageResponse 用于包装 C2C 消息的响应
+type C2CMessageResponse struct {
+	Message       *Message       `json:"message,omitempty"`
+	MediaResponse *MediaResponse `json:"media_response,omitempty"`
 }
 
 // Embed 结构
@@ -82,10 +131,4 @@ type MessageReactionUsers struct {
 	Users  []*User `json:"users,omitempty"`
 	Cookie string  `json:"cookie,omitempty"`
 	IsEnd  bool    `json:"is_end,omitempty"`
-}
-
-// MessageScene 消息场景
-type MessageScene struct {
-	Source       string `json:"source,omitempty"`        // 消息来源, realtime_voice: 实时通话场景, ai_search: AI搜索 其它默认为AIO消息
-	CallbackData string `json:"callback_data,omitempty"` // 回调数据
 }

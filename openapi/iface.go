@@ -5,8 +5,15 @@ import (
 	"time"
 
 	"github.com/tencent-connect/botgo/dto"
-	"github.com/tencent-connect/botgo/openapi/options"
-	"golang.org/x/oauth2"
+	"github.com/tencent-connect/botgo/token"
+)
+
+// RetractMessageOption 撤回消息可选参数
+type RetractMessageOption int
+
+const (
+	// RetractMessageOptionHidetip 撤回消息隐藏小灰条可选参数
+	RetractMessageOptionHidetip RetractMessageOption = 1
 )
 
 // OpenAPI openapi 完整实现
@@ -34,21 +41,12 @@ type OpenAPI interface {
 
 // Base 基础能力接口
 type Base interface {
-	// Version 接口版本
 	Version() APIVersion
-
-	// Setup 初始化
-	Setup(botAppID string, token oauth2.TokenSource, inSandbox bool) OpenAPI
-
+	Setup(token *token.Token, inSandbox bool) OpenAPI
 	// WithTimeout 设置请求接口超时时间
 	WithTimeout(duration time.Duration) OpenAPI
-
-	// SetDebug 设置调试模式, 输出更多过程日志
-	SetDebug(debug bool) OpenAPI
-
 	// Transport 透传请求，如果 sdk 没有及时跟进新的接口的变更，可以使用该方法进行透传，openapi 实现时可以按需选择是否实现该接口
 	Transport(ctx context.Context, method, url string, body interface{}) ([]byte, error)
-
 	// TraceID 返回上一次请求的 trace id
 	TraceID() string
 }
@@ -66,42 +64,27 @@ type UserAPI interface {
 
 // MessageAPI 消息相关接口
 type MessageAPI interface {
-	// Message 拉取频道单条消息
-	Message(ctx context.Context, channelID string, messageID string, opt ...options.Option) (
-		*dto.Message, error)
-
-	// Messages 拉取频道消息列表
-	Messages(ctx context.Context, channelID string, pager *dto.MessagesPager, opt ...options.Option) (
-		[]*dto.Message, error)
-
-	// PostMessage 发送频道消息
-	PostMessage(ctx context.Context, channelID string, msg *dto.MessageToCreate, opt ...options.Option) (
-		*dto.Message, error)
-
-	// PatchMessage 修改频道消息
+	Message(ctx context.Context, channelID string, messageID string) (*dto.Message, error)
+	Messages(ctx context.Context, channelID string, pager *dto.MessagesPager) ([]*dto.Message, error)
+	PostMessage(ctx context.Context, channelID string, msg *dto.MessageToCreate) (*dto.Message, error)
+	// 增加的新的接口,发频道帖子信息
+	PostFourm(ctx context.Context, channelID string, Fourm *dto.FourmToCreate) (*dto.Forum, error)
+	// 增加的新的接口,发频道multipart信息
+	PostMessageMultipart(ctx context.Context, channelID string, msg *dto.MessageToCreate, fileImageData []byte) (*dto.Message, error)
 	PatchMessage(ctx context.Context,
-		channelID string, messageID string, msg *dto.MessageToCreate, opt ...options.Option) (*dto.Message, error)
-
-	// RetractMessage 撤回频道消息
-	RetractMessage(ctx context.Context, channelID, msgID string, opt ...options.Option) error
-
+		channelID string, messageID string, msg *dto.MessageToCreate) (*dto.Message, error)
+	RetractMessage(ctx context.Context, channelID, msgID string, options ...RetractMessageOption) error
+	RetractGroupMessage(ctx context.Context, groupID, msgID string, options ...RetractMessageOption) error
+	RetractC2CMessage(ctx context.Context, userID, msgID string, options ...RetractMessageOption) error
 	// PostSettingGuide 发送设置引导
-	PostSettingGuide(ctx context.Context, channelID string, atUserIDs []string, opt ...options.Option) (
-		*dto.Message, error)
+	PostSettingGuide(ctx context.Context, channelID string, atUserIDs []string) (*dto.Message, error)
 
 	// PostGroupMessage 发送群消息
-	PostGroupMessage(ctx context.Context, groupID string, msg dto.APIMessage, opt ...options.Option) (
-		*dto.Message, error)
-
+	PostGroupMessage(ctx context.Context, groupID string, msg dto.APIMessage) (*dto.GroupMessageResponse, error)
 	// PostC2CMessage 发送C2C消息
-	PostC2CMessage(ctx context.Context, userID string, msg dto.APIMessage, opt ...options.Option) (
-		*dto.Message, error)
-
-	// RetractC2CMessage 撤回C2C消息
-	RetractC2CMessage(ctx context.Context, userID, msgID string, opt ...options.Option) error
-
-	// RetractGroupMessage 撤回群消息
-	RetractGroupMessage(ctx context.Context, groupID, msgID string, opt ...options.Option) error
+	PostC2CMessage(ctx context.Context, userID string, msg dto.APIMessage) (*dto.C2CMessageResponse, error)
+	// PostC2CMessage 发送C2CSSE消息
+	PostC2CMessageSSE(ctx context.Context, userID string, msg dto.APIMessage) (*dto.C2CMessageResponse, error)
 }
 
 // GuildAPI guild 相关接口
@@ -129,8 +112,8 @@ type ChannelAPI interface {
 	// DeleteChannel 删除指定子频道
 	DeleteChannel(ctx context.Context, channelID string) error
 	// CreatePrivateChannel 创建私密子频道
-	CreatePrivateChannel(ctx context.Context, guildID string, value *dto.ChannelValueObject, userIDs []string) (
-		*dto.Channel, error)
+	CreatePrivateChannel(ctx context.Context,
+		guildID string, value *dto.ChannelValueObject, userIds []string) (*dto.Channel, error)
 	ListVoiceChannelMembers(ctx context.Context, channelID string) ([]*dto.Member, error)
 }
 
@@ -166,57 +149,53 @@ type RoleAPI interface {
 
 // MemberAPI 成员相关接口，添加成员到用户组等
 type MemberAPI interface {
-	MemberAddRole(ctx context.Context, guildID string, roleID dto.RoleID, userID string,
-		value *dto.MemberAddRoleBody) error
-
-	MemberDeleteRole(ctx context.Context, guildID string, roleID dto.RoleID, userID string,
-		value *dto.MemberAddRoleBody) error
-
+	MemberAddRole(
+		ctx context.Context,
+		guildID string, roleID dto.RoleID, userID string, value *dto.MemberAddRoleBody,
+	) error
+	MemberDeleteRole(
+		ctx context.Context,
+		guildID string, roleID dto.RoleID, userID string, value *dto.MemberAddRoleBody,
+	) error
 	// MemberMute 频道指定单个成员禁言
 	MemberMute(ctx context.Context, guildID, userID string, mute *dto.UpdateGuildMute) error
-
 	// MultiMemberMute 频道指定批量成员禁言
-	MultiMemberMute(ctx context.Context, guildID string, mute *dto.UpdateGuildMute) (
-		*dto.UpdateGuildMuteResponse, error)
+	MultiMemberMute(ctx context.Context, guildID string,
+		mute *dto.UpdateGuildMute) (*dto.UpdateGuildMuteResponse, error)
 }
 
 // DirectMessageAPI 信息相关接口
 type DirectMessageAPI interface {
 	// CreateDirectMessage 创建私信频道
-	CreateDirectMessage(ctx context.Context, dm *dto.DirectMessageToCreate,
-		opt ...options.Option) (*dto.DirectMessage, error)
-
+	CreateDirectMessage(ctx context.Context, dm *dto.DirectMessageToCreate) (*dto.DirectMessage, error)
 	// PostDirectMessage 在私信频道内发消息
-	PostDirectMessage(ctx context.Context, dm *dto.DirectMessage,
-		msg *dto.MessageToCreate, opt ...options.Option) (*dto.Message, error)
-
+	PostDirectMessage(ctx context.Context, dm *dto.DirectMessage, msg *dto.MessageToCreate) (*dto.Message, error)
+	//自己加的 官方没有
+	PostDirectMessageMultipart(ctx context.Context, dm *dto.DirectMessage, msg *dto.MessageToCreate, fileImageData []byte) (*dto.Message, error)
 	// RetractDMMessage 撤回私信频道消息
-	RetractDMMessage(ctx context.Context, guildID, msgID string, opt ...options.Option) error
-
+	RetractDMMessage(ctx context.Context, guildID, msgID string, options ...RetractMessageOption) error
 	// PostDMSettingGuide 发送私信设置引导, jumpGuildID为设置引导要跳转的频道ID
-	PostDMSettingGuide(ctx context.Context, dm *dto.DirectMessage, jumpGuildID string,
-		opt ...options.Option) (*dto.Message, error)
+	PostDMSettingGuide(ctx context.Context, dm *dto.DirectMessage, jumpGuildID string) (*dto.Message, error)
 }
 
 // AnnouncesAPI 公告相关接口
 type AnnouncesAPI interface {
 	// CreateChannelAnnounces 创建子频道公告
-	CreateChannelAnnounces(ctx context.Context, channelID string, announce *dto.ChannelAnnouncesToCreate) (
-		*dto.Announces, error)
-
+	CreateChannelAnnounces(
+		ctx context.Context,
+		channelID string, announce *dto.ChannelAnnouncesToCreate,
+	) (*dto.Announces, error)
 	// DeleteChannelAnnounces 删除子频道公告,会校验 messageID 是否匹配
 	DeleteChannelAnnounces(ctx context.Context, channelID, messageID string) error
-
 	// CleanChannelAnnounces 删除子频道公告,不校验 messageID
 	CleanChannelAnnounces(ctx context.Context, channelID string) error
-
 	// CreateGuildAnnounces 创建频道全局公告
-	CreateGuildAnnounces(ctx context.Context, guildID string, announce *dto.GuildAnnouncesToCreate) (
-		*dto.Announces, error)
-
+	CreateGuildAnnounces(
+		ctx context.Context, guildID string,
+		announce *dto.GuildAnnouncesToCreate,
+	) (*dto.Announces, error)
 	// DeleteGuildAnnounces 删除频道全局公告
 	DeleteGuildAnnounces(ctx context.Context, guildID, messageID string) error
-
 	// CleanGuildAnnounces 删除频道全局公告,不校验 messageID
 	CleanGuildAnnounces(ctx context.Context, guildID string) error
 }
@@ -225,16 +204,12 @@ type AnnouncesAPI interface {
 type ScheduleAPI interface {
 	// ListSchedules 查询某个子频道下，since开始的当天的日程列表。若since为0，默认返回当天的日程列表
 	ListSchedules(ctx context.Context, channelID string, since uint64) ([]*dto.Schedule, error)
-
 	// GetSchedule 获取单个日程信息
 	GetSchedule(ctx context.Context, channelID, scheduleID string) (*dto.Schedule, error)
-
 	// CreateSchedule 创建日程
 	CreateSchedule(ctx context.Context, channelID string, schedule *dto.Schedule) (*dto.Schedule, error)
-
 	// ModifySchedule 修改日程
 	ModifySchedule(ctx context.Context, channelID, scheduleID string, schedule *dto.Schedule) (*dto.Schedule, error)
-
 	// DeleteSchedule 删除日程
 	DeleteSchedule(ctx context.Context, channelID, scheduleID string) error
 }
@@ -243,10 +218,9 @@ type ScheduleAPI interface {
 type APIPermissionsAPI interface {
 	// GetAPIPermissions 获取频道可用权限列表
 	GetAPIPermissions(ctx context.Context, guildID string) (*dto.APIPermissions, error)
-
 	// RequireAPIPermissions 创建频道 API 接口权限授权链接
-	RequireAPIPermissions(ctx context.Context, guildID string, demand *dto.APIPermissionDemandToCreate) (
-		*dto.APIPermissionDemand, error)
+	RequireAPIPermissions(ctx context.Context,
+		guildID string, demand *dto.APIPermissionDemandToCreate) (*dto.APIPermissionDemand, error)
 }
 
 // PinsAPI 精华消息接口
@@ -278,7 +252,7 @@ type InteractionAPI interface {
 	PutInteraction(ctx context.Context, interactionID string, body string) error
 }
 
-// WebhookAPI Deprecated: webhook无需维护session。http 事件网关相关接口
+// WebhookAPI http 事件网关相关接口
 type WebhookAPI interface {
 	CreateSession(ctx context.Context, identity dto.HTTPIdentity) (*dto.HTTPReady, error)
 	CheckSessions(ctx context.Context) ([]*dto.HTTPSession, error)

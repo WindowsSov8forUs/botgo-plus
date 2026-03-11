@@ -6,18 +6,27 @@ import (
 	"github.com/tencent-connect/botgo/log"
 	"github.com/tencent-connect/botgo/openapi"
 	v1 "github.com/tencent-connect/botgo/openapi/v1"
+	v2 "github.com/tencent-connect/botgo/openapi/v2"
+	"github.com/tencent-connect/botgo/token"
+	"github.com/tencent-connect/botgo/webhook/server"
 	"github.com/tencent-connect/botgo/websocket/client"
-	"golang.org/x/oauth2"
 )
 
 func init() {
 	v1.Setup()     // 注册 v1 接口
+	v2.Setup()     // 注册 v2 接口
 	client.Setup() // 注册 websocket client 实现
+	server.Setup() // 注册 webhook server 实现
 }
 
 // NewSessionManager 获得 session manager 实例
 func NewSessionManager() SessionManager {
 	return defaultSessionManager
+}
+
+// NewWebhookManager 获得 webhook manager 实例
+func NewWebhookManager() WebhookManager {
+	return defaultWebhookManager
 }
 
 // SelectOpenAPIVersion 指定使用哪个版本的 api 实现，如果不指定，sdk将默认使用第一个 setup 的 api 实现
@@ -32,11 +41,12 @@ func SelectOpenAPIVersion(version openapi.APIVersion) error {
 
 // NewOpenAPI 创建新的 openapi 实例，会返回当前的 openapi 实现的实例
 // 如果需要使用其他版本的实现，需要在调用这个方法之前调用 SelectOpenAPIVersion 方法
-func NewOpenAPI(appID string, tokenSource oauth2.TokenSource) openapi.OpenAPI {
-	return openapi.DefaultImpl.Setup(appID, tokenSource, false)
+func NewOpenAPI(token *token.Token) openapi.OpenAPI {
+	log.Debugf("NewOpenAPI called with token: %v\n", token)
+	return openapi.DefaultImpl.Setup(token, false)
 }
 
 // NewSandboxOpenAPI 创建测试环境的 openapi 实例
-func NewSandboxOpenAPI(appID string, tokenSource oauth2.TokenSource) openapi.OpenAPI {
-	return openapi.DefaultImpl.Setup(appID, tokenSource, true)
+func NewSandboxOpenAPI(token *token.Token) openapi.OpenAPI {
+	return openapi.DefaultImpl.Setup(token, true)
 }

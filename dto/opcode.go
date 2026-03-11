@@ -1,11 +1,11 @@
 package dto
 
-// OPCode websocket op 码
+// OPCode 通用 op 码
 type OPCode int
 
-// WS OPCode
+// OPCode
 const (
-	WSDispatchEvent OPCode = iota
+	DispatchEvent OPCode = iota
 	WSHeartbeat
 	WSIdentity
 	_ // Presence Update
@@ -23,14 +23,16 @@ const (
 
 // opMeans op 对应的含义字符串标识
 var opMeans = map[OPCode]string{
-	WSDispatchEvent:  "Event",
-	WSHeartbeat:      "Heartbeat",
-	WSIdentity:       "Identity",
-	WSResume:         "Resume",
-	WSReconnect:      "Reconnect",
-	WSInvalidSession: "InvalidSession",
-	WSHello:          "Hello",
-	WSHeartbeatAck:   "HeartbeatAck",
+	DispatchEvent:          "Event",
+	WSHeartbeat:            "Heartbeat",
+	WSIdentity:             "Identity",
+	WSResume:               "Resume",
+	WSReconnect:            "Reconnect",
+	WSInvalidSession:       "InvalidSession",
+	WSHello:                "Hello",
+	WSHeartbeatAck:         "HeartbeatAck",
+	HTTPCallbackAck:        "HTTPCallbackAck",
+	HTTPCallbackValidation: "回调地址验证",
 }
 
 // OPMeans 返回 op 含义

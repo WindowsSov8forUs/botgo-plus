@@ -2,6 +2,7 @@ package lock
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -9,8 +10,16 @@ import (
 )
 
 func TestLock_Lock(t *testing.T) {
+	if os.Getenv("BOTGO_REDIS_TEST") != "1" {
+		t.Skip("skip redis integration test; set BOTGO_REDIS_TEST=1 to enable")
+	}
+	addr := os.Getenv("BOTGO_REDIS_ADDR")
+	if addr == "" {
+		addr = "localhost:6379"
+	}
+
 	conn := redis.NewClient(&redis.Options{
-		Addr:         "localhost:6379",
+		Addr:         addr,
 		DialTimeout:  800 * time.Millisecond,
 		ReadTimeout:  3 * time.Second,
 		WriteTimeout: 3 * time.Second,

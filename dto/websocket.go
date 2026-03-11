@@ -3,13 +3,21 @@ package dto
 import (
 	"fmt"
 
-	"golang.org/x/oauth2"
+	"github.com/tencent-connect/botgo/token"
 )
 
 // WebsocketAP wss 接入点信息
 type WebsocketAP struct {
 	URL               string            `json:"url"`
 	Shards            uint32            `json:"shards"`
+	SessionStartLimit SessionStartLimit `json:"session_start_limit"`
+}
+
+// WebsocketAP wss 单个接入点信息
+type WebsocketAPSingle struct {
+	URL               string            `json:"url"`
+	ShardCount        uint32            `json:"shards"`   //最大值 比如是4个分片就是4
+	ShardID           uint32            `json:"shard_id"` //从0开始的 0 1 2 3 对应上面的
 	SessionStartLimit SessionStartLimit `json:"session_start_limit"`
 }
 
@@ -29,14 +37,12 @@ type ShardConfig struct {
 
 // Session 连接的 session 结构，包括链接的所有必要字段
 type Session struct {
-	ID          string
-	URL         string
-	TokenSource oauth2.TokenSource
-	Intent      Intent
-	LastSeq     uint32
-	Shards      ShardConfig
-
-	AppID string
+	ID      string
+	URL     string
+	Token   token.Token
+	Intent  Intent
+	LastSeq uint32
+	Shards  ShardConfig
 }
 
 // String 输出session字符串
@@ -50,4 +56,42 @@ type WSUser struct {
 	ID       string `json:"id"`
 	Username string `json:"username"`
 	Bot      bool   `json:"bot"`
+}
+
+// WSIdentityData 鉴权数据
+type WSIdentityData struct {
+	Token      string   `json:"token"`
+	Intents    Intent   `json:"intents"`
+	Shard      []uint32 `json:"shard"` // array of two integers (shard_id, num_shards)
+	Properties struct {
+		Os      string `json:"$os,omitempty"`
+		Browser string `json:"$browser,omitempty"`
+		Device  string `json:"$device,omitempty"`
+	} `json:"properties,omitempty"`
+}
+
+// WSResumeData 重连数据
+type WSResumeData struct {
+	Token     string `json:"token"`
+	SessionID string `json:"session_id"`
+	Seq       uint32 `json:"seq"`
+}
+
+// 以下为会收到的事件data
+
+// WSHelloData hello 返回
+type WSHelloData struct {
+	HeartbeatInterval int `json:"heartbeat_interval"`
+}
+
+// WSReadyData ready，鉴权后返回
+type WSReadyData struct {
+	Version   int    `json:"version"`
+	SessionID string `json:"session_id"`
+	User      struct {
+		ID       string `json:"id"`
+		Username string `json:"username"`
+		Bot      bool   `json:"bot"`
+	} `json:"user"`
+	Shard []uint32 `json:"shard"`
 }

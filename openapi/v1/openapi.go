@@ -10,21 +10,20 @@ import (
 	"time"
 
 	"github.com/go-resty/resty/v2" // resty 是一个优秀的 rest api 客户端，可以极大的减少开发基于 rest 标准接口求请求的封装工作量
-	"github.com/tencent-connect/botgo/constant"
+
 	"github.com/tencent-connect/botgo/errs"
 	"github.com/tencent-connect/botgo/log"
 	"github.com/tencent-connect/botgo/openapi"
+	"github.com/tencent-connect/botgo/token"
 	"github.com/tencent-connect/botgo/version"
-	"golang.org/x/oauth2"
 )
 
 // MaxIdleConns 默认指定空闲连接池大小
 const MaxIdleConns = 3000
 
 type openAPI struct {
-	appID       string
-	tokenSource oauth2.TokenSource
-	timeout     time.Duration
+	token   *token.Token
+	timeout time.Duration
 
 	sandbox     bool   // 请求沙箱环境
 	debug       bool   // debug 模式，调试sdk时候使用
@@ -49,26 +48,22 @@ func (o *openAPI) TraceID() string {
 }
 
 // Setup 生成一个实例
-func (o *openAPI) Setup(botAppID string, tokenSource oauth2.TokenSource, inSandbox bool) openapi.OpenAPI {
+func (o *openAPI) Setup(token *token.Token, inSandbox bool) openapi.OpenAPI {
+	// 打印传入的令牌以进行调试
+	//log.Printf("Setup called with token: %+v\n", token)
+
 	api := &openAPI{
-		appID:       botAppID,
-		tokenSource: tokenSource,
-		timeout:     5 * time.Second,
-		sandbox:     inSandbox,
+		token:   token,
+		timeout: 3 * time.Second,
+		sandbox: inSandbox,
 	}
-	api.setupClient(botAppID) // 初始化可复用的 client
+	api.setupClient() // 初始化可复用的 client
 	return api
 }
 
 // WithTimeout 设置请求接口超时时间
 func (o *openAPI) WithTimeout(duration time.Duration) openapi.OpenAPI {
 	o.restyClient.SetTimeout(duration)
-	return o
-}
-
-// SetDebug 设置调试模式, 输出更多过程日志
-func (o *openAPI) SetDebug(debug bool) openapi.OpenAPI {
-	o.restyClient.Debug = debug
 	return o
 }
 
@@ -79,47 +74,45 @@ func (o *openAPI) Transport(ctx context.Context, method, url string, body interf
 }
 
 // 初始化 client
-func (o *openAPI) setupClient(appID string) {
+func (o *openAPI) setupClient() {
 	o.restyClient = resty.New().
 		SetTransport(createTransport(nil, MaxIdleConns)). // 自定义 transport
 		SetLogger(log.DefaultLogger).
 		SetDebug(o.debug).
 		SetTimeout(o.timeout).
+		SetAuthScheme(string(o.token.Type)).
 		SetHeader("User-Agent", version.String()).
-		SetHeader("X-Union-Appid", appID).
+		SetHeader("X-Union-Appid", fmt.Sprint(o.token.GetAppID())).
 		SetPreRequestHook(
-			func(_ *resty.Client, request *http.Request) error {
+			func(client *resty.Client, request *http.Request) error {
 				// 执行请求前过滤器
 				// 由于在 `OnBeforeRequest` 的时候，request 还没生成，所以 filter 不能使用，所以放到 `PreRequestHook`
 				return openapi.DoReqFilterChains(request, nil)
 			},
 		).
 		OnBeforeRequest(
-			func(c *resty.Client, _ *resty.Request) error {
-				tk, err := o.tokenSource.Token()
-				if err != nil {
-					log.Errorf("[setupClient] retrieve token failed:%s", err)
-					return err
-				}
-				c.SetAuthScheme(tk.TokenType)
-				log.Debugf("token type:%s", tk.TokenType)
-				c.SetAuthToken(tk.AccessToken)
+			func(c *resty.Client, r *resty.Request) error {
+				// 设置授权方案为 "QQBot"
+				c.SetAuthScheme("QQBot")
+				//c.SetAuthScheme("Bot")
+				//c.SetAuthToken(o.token.GetString_old())
+				//t.GetAccessToken() 是群的
+				c.SetAuthToken(o.token.GetAccessToken())
 				return nil
 			},
 		).
 		// 设置请求之后的钩子，打印日志，判断状态码
 		OnAfterResponse(
-			func(_ *resty.Client, resp *resty.Response) error {
-				log.Infof("%v", respInfo(resp))
+			func(client *resty.Client, resp *resty.Response) error {
+				log.Debugf("%v", respInfo(resp))
 				// 执行请求后过滤器
 				if err := openapi.DoRespFilterChains(resp.Request.RawRequest, resp.RawResponse); err != nil {
 					return err
 				}
-				traceID := resp.Header().Get(constant.HeaderTraceID)
+				traceID := resp.Header().Get(openapi.TraceIDKey)
 				o.lastTraceID = traceID
 				// 非成功含义的状态码，需要返回 error 供调用方识别
 				if !openapi.IsSuccessStatus(resp.StatusCode()) {
-					o.handleError(resp)
 					return errs.New(resp.StatusCode(), string(resp.Body()), traceID)
 				}
 				return nil
@@ -132,36 +125,6 @@ func (o *openAPI) request(ctx context.Context) *resty.Request {
 	return o.restyClient.R().SetContext(ctx)
 }
 
-// GetAppID 获取接口地址，会处理沙箱环境判断
-func (o *openAPI) GetAppID() string {
-	if o == nil {
-		return ""
-	}
-	return o.appID
-}
-
-// errBody 请求出错情况下的body结构
-type errBody struct {
-	Message string `json:"message"`  // 错误原因
-	Code    int    `json:"code"`     // 错误码，后续废弃
-	ErrCode int    `json:"err_code"` // 错误码
-	TraceID string `json:"trace_id"` // 服务端traceID, 用于问题排查
-}
-
-// handleError 处理openapi调用失败的情况
-func (o *openAPI) handleError(resp *resty.Response) {
-	var b errBody
-	err := json.Unmarshal(resp.Body(), &b)
-	if err != nil {
-		log.Errorf("parse errBody fail, err:%v, body:%s", err, string(resp.Body()))
-		return
-	}
-	if b.ErrCode == errs.APICodeTokenExpireOrNotExist || b.Code == errs.APICodeTokenExpireOrNotExist {
-		log.Errorf("token expire or not exist, update token")
-		_, _ = o.tokenSource.Token()
-	}
-}
-
 // respInfo 用于输出日志的时候格式化数据
 func respInfo(resp *resty.Response) string {
 	bodyJSON, _ := json.Marshal(resp.Request.Body)
@@ -169,13 +132,20 @@ func respInfo(resp *resty.Response) string {
 		"[OPENAPI]%v %v, traceID:%v, status:%v, elapsed:%v req: %v, resp: %v",
 		resp.Request.Method,
 		resp.Request.URL,
-		resp.Header().Get(constant.HeaderTraceID),
+		resp.Header().Get(openapi.TraceIDKey),
 		resp.Status(),
 		resp.Time(),
 		string(bodyJSON),
 		string(resp.Body()),
 	)
 }
+
+// reqInfo 用于请求日志格式化
+func reqInfo(req *resty.Request) string {
+	bodyJSON, _ := json.Marshal(req)
+	return fmt.Sprintf("[OPENAPI]%v %v data:%v", req.Method, req.URL, string(bodyJSON))
+}
+
 func createTransport(localAddr net.Addr, idleConns int) *http.Transport {
 	dialer := &net.Dialer{
 		Timeout:   60 * time.Second,

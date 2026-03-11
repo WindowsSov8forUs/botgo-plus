@@ -8,8 +8,9 @@ import (
 	"github.com/tencent-connect/botgo/dto"
 	"github.com/tencent-connect/botgo/log"
 	"github.com/tencent-connect/botgo/sessions/manager"
+	"github.com/tencent-connect/botgo/token"
+	"github.com/tencent-connect/botgo/webhook"
 	"github.com/tencent-connect/botgo/websocket"
-	"golang.org/x/oauth2"
 )
 
 // New 创建本地session管理器
@@ -23,24 +24,24 @@ type ChanManager struct {
 }
 
 // Start 启动本地 session manager
-func (l *ChanManager) Start(apInfo *dto.WebsocketAP, tokenSource oauth2.TokenSource, intents *dto.Intent) error {
+func (l *ChanManager) Start(apInfo *dto.WebsocketAP, token *token.Token, intents *dto.Intent) error {
 	defer log.Sync()
 	if err := manager.CheckSessionLimit(apInfo); err != nil {
 		log.Errorf("[ws/session/local] session limited apInfo: %+v", apInfo)
 		return err
 	}
 	startInterval := manager.CalcInterval(apInfo.SessionStartLimit.MaxConcurrency)
-	log.Infof("[ws/session/local] will start %d sessions and per session start interval is %s",
+	log.Debugf("[ws/session/local] will start %d sessions and per session start interval is %s",
 		apInfo.Shards, startInterval)
 
 	// 按照shards数量初始化，用于启动连接的管理
 	l.sessionChan = make(chan dto.Session, apInfo.Shards)
 	for i := uint32(0); i < apInfo.Shards; i++ {
 		session := dto.Session{
-			URL:         apInfo.URL,
-			TokenSource: tokenSource,
-			Intent:      *intents,
-			LastSeq:     0,
+			URL:     apInfo.URL,
+			Token:   *token,
+			Intent:  *intents,
+			LastSeq: 0,
 			Shards: dto.ShardConfig{
 				ShardID:    i,
 				ShardCount: apInfo.Shards,
@@ -54,6 +55,41 @@ func (l *ChanManager) Start(apInfo *dto.WebsocketAP, tokenSource oauth2.TokenSou
 		time.Sleep(startInterval)
 		go l.newConnect(session)
 	}
+	return nil
+}
+
+// Start 启动指定的分片 session manager 适合想要手动指定目前分片的开发者（分片较少)
+func (l *ChanManager) StartSingle(apInfo *dto.WebsocketAPSingle, token *token.Token, intents *dto.Intent) error {
+	defer log.Sync()
+	if err := manager.CheckSessionLimitSingle(apInfo); err != nil {
+		log.Errorf("[ws/session/local] session limited apInfo: %+v", apInfo)
+		return err
+	}
+	startInterval := manager.CalcInterval(apInfo.SessionStartLimit.MaxConcurrency)
+	log.Debugf("[ws/session/local] will start %d sessions and per session start interval is %s",
+		apInfo.ShardCount, startInterval)
+
+	// 只启动一个分片
+	// 按照1数量初始化，用于启动连接的管理
+	l.sessionChan = make(chan dto.Session, 1)
+	session := dto.Session{
+		URL:     apInfo.URL,
+		Token:   *token,
+		Intent:  *intents,
+		LastSeq: 0,
+		Shards: dto.ShardConfig{
+			ShardID:    apInfo.ShardID,
+			ShardCount: apInfo.ShardCount,
+		},
+	}
+	l.sessionChan <- session
+
+	for session := range l.sessionChan {
+		// MaxConcurrency 代表的是每 5s 可以连多少个请求
+		time.Sleep(startInterval)
+		go l.newConnect(session)
+	}
+
 	return nil
 }
 
@@ -87,7 +123,7 @@ func (l *ChanManager) newConnect(session dto.Session) {
 		log.Errorf("[ws/session] Identify/Resume err %+v", err)
 		return
 	}
-	if err = wsClient.Listening(); err != nil {
+	if err := wsClient.Listening(); err != nil {
 		log.Errorf("[ws/session] Listening err %+v", err)
 		currentSession := wsClient.Session()
 		// 对于不能够进行重连的session，需要清空 session id 与 seq
@@ -105,4 +141,43 @@ func (l *ChanManager) newConnect(session dto.Session) {
 		l.sessionChan <- *currentSession
 		return
 	}
+}
+
+func NewWebhook() *WebhookManager {
+	return &WebhookManager{
+		config: make(chan dto.Config, 1),
+	}
+}
+
+type WebhookManager struct {
+	config chan dto.Config
+}
+
+func (w *WebhookManager) Start(config *dto.Config) error {
+	w.config <- *config
+
+	for config := range w.config {
+		if err := w.listenAndServe(config); err != nil {
+			log.Errorf("webhook server listen and serve failed: %v", err)
+		}
+		time.Sleep(5 * time.Second)
+	}
+	return nil
+}
+
+func (w *WebhookManager) listenAndServe(config dto.Config) error {
+	defer func() {
+		if err := recover(); err != nil {
+			log.Errorf("webhook server panic: %v", err)
+			w.config <- config
+		}
+	}()
+	whServer := webhook.ServerImpl.New(config)
+
+	if err := whServer.Listen(); err != nil {
+		log.Error(err)
+		w.config <- config
+		return err
+	}
+	return nil
 }
