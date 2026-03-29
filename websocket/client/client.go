@@ -312,9 +312,20 @@ func (c *Client) listenMessageAndHandle() {
 	}()
 	for payload := range c.messageQueue {
 		c.saveSeq(payload.Seq)
-		// ready 事件需要特殊处理
-		if payload.Type == "READY" {
+		ready := payload.Type == "READY"
+		if ready {
 			c.readyHandler(payload)
+		}
+		if c.session.PayloadParser != nil {
+			handled, err := c.session.PayloadParser(payload)
+			if err != nil {
+				log.Errorf("%s custom payload parser failed, %v", c.session, err)
+			}
+			if handled {
+				continue
+			}
+		}
+		if ready {
 			continue
 		}
 

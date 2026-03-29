@@ -43,6 +43,9 @@ type Session struct {
 	Intent  Intent
 	LastSeq uint32
 	Shards  ShardConfig
+	// PayloadParser allows callers to handle payloads per-session.
+	// If handled is true, default event parser will be skipped.
+	PayloadParser func(event *Payload) (handled bool, err error) `json:"-"`
 }
 
 // String 输出session字符串
