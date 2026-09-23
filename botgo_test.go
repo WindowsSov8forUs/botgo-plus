@@ -4,29 +4,16 @@ import (
 	"testing"
 
 	"github.com/WindowsSov8forUs/botgo-plus/openapi"
+	"github.com/WindowsSov8forUs/botgo-plus/token"
 )
 
-func TestUseOpenAPIVersion(t *testing.T) {
-	type args struct {
-		version openapi.APIVersion
+func TestNewClient(t *testing.T) {
+	source := token.NewQQBotTokenSource(&token.QQBotCredentials{AppID: "fixture", AppSecret: "fixture"})
+	client, err := NewClient("fixture", source)
+	if err != nil {
+		t.Fatal(err)
 	}
-	tests := []struct {
-		name    string
-		args    args
-		wantErr bool
-	}{
-		{
-			"not found", args{version: 0}, true,
-		},
-		{
-			"v1 found", args{version: 1}, false,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if err := SelectOpenAPIVersion(tt.args.version); (err != nil) != tt.wantErr {
-				t.Errorf("SelectOpenAPIVersion() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
+	if client.GetAppID() != "fixture" || client.Version() != openapi.APIv1 {
+		t.Fatalf("client app=%s version=%v", client.GetAppID(), client.Version())
 	}
 }
