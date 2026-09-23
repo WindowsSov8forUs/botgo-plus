@@ -157,6 +157,12 @@ func getGroupURIBySendType(msgType dto.SendType) uri {
 // PostGroupMessage 回复群消息
 func (o *openAPI) PostGroupMessage(ctx context.Context, groupID string, msg dto.APIMessage,
 	opt ...options.Option) (*dto.Message, error) {
+	if _, err := nativeID(groupID); err != nil {
+		return nil, err
+	}
+	if err := validateNativeMessage(msg); err != nil {
+		return nil, err
+	}
 	reqCMD := o.request(ctx).
 		SetResult(dto.Message{}).
 		SetPathParam("group_id", groupID).
@@ -181,6 +187,12 @@ func getC2CURIBySendType(msgType dto.SendType) uri {
 // PostC2CMessage 回复C2C消息
 func (o *openAPI) PostC2CMessage(ctx context.Context, userID string, msg dto.APIMessage,
 	opt ...options.Option) (*dto.Message, error) {
+	if _, err := nativeID(userID); err != nil {
+		return nil, err
+	}
+	if err := validateNativeMessage(msg); err != nil {
+		return nil, err
+	}
 	reqCMD := o.request(ctx).
 		SetResult(dto.Message{}).
 		SetPathParam("user_id", userID).

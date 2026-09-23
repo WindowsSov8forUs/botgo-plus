@@ -62,7 +62,130 @@ func TestQQMessages(t *testing.T) {
 	}
 }
 
+func TestQQGroupAPI(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Tps-trace-ID", "group-trace")
+		switch r.Method + " " + r.URL.Path {
+		case "GET /v2/groups/group/members":
+			switch r.URL.Query().Get("cursor") {
+			case "":
+				_, _ = io.WriteString(w, `{"members":[{"member_openid":"one","member_role":"admin"}],"next_cursor":"next+/=="}`)
+			case "next+/==":
+				_, _ = io.WriteString(w, `{"members":[{"member_openid":"two"}],"next_cursor":""}`)
+			default:
+				t.Errorf("cursor=%q", r.URL.Query().Get("cursor"))
+				w.WriteHeader(400)
+			}
+		case "POST /v2/groups/group/batch_remove_members":
+			var body dto.QQGroupRemoveRequest
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Error(err)
+			}
+			if len(body.MemberOpenIDs) != 1 || body.MemberOpenIDs[0] != "one" {
+				t.Errorf("remove=%+v", body)
+			}
+			_, _ = io.WriteString(w, `{"remove_members_result":"success","add_to_member_blacklist_fail_openids":["one"]}`)
+		case "POST /v2/groups/group/restrict_chat_setting":
+			var body dto.QQGroupMuteRequest
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Error(err)
+			}
+			if len(body.Members) != 1 || body.Members[0].Op != "del" || body.Members[0].MemberOpenID != "one" {
+				t.Errorf("mute=%+v", body)
+			}
+			_, _ = io.WriteString(w, `{}`)
+		default:
+			t.Errorf("request=%s %s", r.Method, r.URL.Path)
+			w.WriteHeader(404)
+		}
+	}))
+	defer server.Close()
+	client, err := New("app", staticSource(), WithBaseURL(server.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, meta, err := client.GetQQGroupMembers(context.Background(), "group", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Members) != 1 || first.Members[0].MemberRole != "admin" || first.NextCursor != "next+/==" || meta.TraceID != "group-trace" {
+		t.Fatalf("first page=%+v meta=%+v", first, meta)
+	}
+	second, _, err := client.GetQQGroupMembers(context.Background(), "group", first.NextCursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Members) != 1 || second.Members[0].MemberOpenID != "two" || second.NextCursor != "" {
+		t.Fatalf("second page=%+v", second)
+	}
+	removed, _, err := client.RemoveQQGroupMembers(context.Background(), "group", &dto.QQGroupRemoveRequest{MemberOpenIDs: []string{"one"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed.RemoveMembersResult != "success" || len(removed.BlacklistFailedOpenIDs) != 1 || removed.BlacklistFailedOpenIDs[0] != "one" {
+		t.Fatalf("remove result=%+v", removed)
+	}
+	if _, err := client.SetQQGroupMemberMute(context.Background(), "group", &dto.QQGroupMuteRequest{Members: []dto.QQGroupMuteOperation{{Op: "del", MemberOpenID: "one"}}}); err != nil {
+		t.Fatal(err)
+	}
+}
 
+func TestStreamMediaAndInteraction(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method + " " + r.URL.Path {
+		case "POST /v2/users/user/stream_messages":
+			if string(body["index"]) != "0" || string(body["input_state"]) != "1" || string(body["content_raw"]) != `"text"` {
+				t.Errorf("stream=%s", body)
+			}
+			_, _ = io.WriteString(w, `{"id":"stream","ext_info":{"ref_idx":"REFIDX_stream=="}}`)
+		case "POST /v2/groups/group/files":
+			if string(body["url"]) != `"https://example.invalid/file"` || string(body["file_type"]) != "4" || string(body["srv_send_msg"]) != "false" {
+				t.Errorf("upload=%s", body)
+			}
+			_, _ = io.WriteString(w, `{"file_uuid":"uuid","file_info":"opaque!file-info","ttl":100}`)
+		case "PUT /interactions/interaction":
+			if string(body["code"]) != "0" {
+				t.Errorf("interaction=%s", body)
+			}
+			w.WriteHeader(204)
+		default:
+			t.Errorf("request=%s %s", r.Method, r.URL.Path)
+			w.WriteHeader(404)
+		}
+	}))
+	defer server.Close()
+	client, err := New("app", staticSource(), WithBaseURL(server.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, _, err := client.PostC2CStreamMessage(context.Background(), "user", &dto.C2CStreamRequest{InputState: 1, ContentRaw: "text", MsgID: "incoming", MsgSeq: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if message.ID != "stream" || message.ExtInfo == nil || message.ExtInfo.RefIdx != "REFIDX_stream==" {
+		t.Fatalf("stream result=%+v", message)
+	}
+	uploaded, _, err := client.UploadGroupFile(context.Background(), "group", &dto.MediaUploadRequest{URL: "https://example.invalid/file", FileType: 4, FileName: "fixture.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uploaded.FileUUID != "uuid" || uploaded.FileInfo != "opaque!file-info" || uploaded.TTL != 100 {
+		t.Fatalf("upload result=%+v", uploaded)
+	}
+	meta, err := client.AcknowledgeInteraction(context.Background(), "interaction", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.StatusCode != 204 {
+		t.Fatalf("interaction status=%d", meta.StatusCode)
+	}
+}
 
 type rotatingSource struct {
 	mu      sync.Mutex
