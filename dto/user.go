@@ -2,6 +2,11 @@ package dto
 
 // User 用户
 type User struct {
+	UserOpenID       string `json:"user_openid,omitempty"`
+	MemberOpenID     string `json:"member_openid,omitempty"`
+	MemberRole       string `json:"member_role,omitempty"`
+	Scope            string `json:"scope,omitempty"`
+	IsYou            bool   `json:"is_you,omitempty"`
 	ID               string `json:"id"`
 	Username         string `json:"username"`
 	Avatar           string `json:"avatar"`

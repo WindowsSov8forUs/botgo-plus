@@ -19,6 +19,8 @@ type APIMessage interface {
 // RichMediaMessage 富媒体消息
 // 注意：直接使用srv_send_msg=tre时会占用主动消息频率，且多媒体文件不能复用，建议先上传，然后再使用消息发送类型7进行发送
 type RichMediaMessage struct {
+	FileName   string `json:"file_name,omitempty"`
+	UploadID   string `json:"upload_id,omitempty"`
 	EventID    string `json:"event_id,omitempty"`     // 已经废弃：要回复的事件id, 逻辑同MsgID
 	FileType   uint64 `json:"file_type,omitempty"`    // 业务类型，图片，文件，语音，视频 文件类型，取值:1图片,2视频,3语音(目前语音只支持silk格式)
 	URL        string `json:"url,omitempty"`          // 需发送的富媒体文件，HTTP或者HTTPS链接
@@ -52,11 +54,12 @@ const (
 
 // MessageToCreate 发送消息结构体定义
 type MessageToCreate struct {
-	Content string      `json:"content,omitempty"`
-	MsgType MessageType `json:"msg_type,omitempty"` //消息类型: 0:文字消息, 2: md消息
-	Embed   *Embed      `json:"embed,omitempty"`
-	Ark     *Ark        `json:"ark,omitempty"`
-	Image   string      `json:"image,omitempty"`
+	IsWakeup bool        `json:"is_wakeup,omitempty"`
+	Content  string      `json:"content,omitempty"`
+	MsgType  MessageType `json:"msg_type,omitempty"` //消息类型: 0:文字消息, 2: md消息
+	Embed    *Embed      `json:"embed,omitempty"`
+	Ark      *Ark        `json:"ark,omitempty"`
+	Image    string      `json:"image,omitempty"`
 	// 要回复的消息id，为空是主动消息，公域机器人会异步审核，不为空是被动消息，公域机器人会校验语料
 	MsgID            string                    `json:"msg_id,omitempty"`
 	MessageReference *MessageReference         `json:"message_reference,omitempty"`
@@ -74,7 +77,8 @@ type MessageToCreate struct {
 	FeatureID        uint                      `json:"feature_id,omitempty"`      // 控制消息发送
 }
 
-// Stream 流式消息信息
+// Deprecated: use C2CStreamRequest with the dedicated /stream_messages endpoint.
+// Stream retains the historical /messages payload unchanged. Current platform support is not guaranteed.
 type Stream struct {
 	State int32  `json:"state,omitempty"` // 流式消息状态 1正文生成中，10：正文生成结束， 11：引志消息生成中， 20：引导消息生成结束。
 	ID    string `json:"id,omitempty"`    // 流式消息ID，流式消息第一条不用填写，第二条需要填写第一个分片返回的msgID.
@@ -125,12 +129,13 @@ func (msg MessageReference) GetSendType() SendType {
 
 // Markdown markdown 消息
 type Markdown struct {
-	TemplateID       int               `json:"template_id"`        // 模版 id
-	CustomTemplateID string            `json:"custom_template_id"` // 自定义模板id
-	Params           []*MarkdownParams `json:"params"`             // 模版参数
-	Content          string            `json:"content"`            // 原生 markdown
-	Style            *MarkdownStyle    `json:"style"`              // markdown样式
-	ProcessMsg       string            `json:"process_msg"`        // markdown引导消息
+	ForceVerifyImageResource bool              `json:"force_verify_image_resource,omitempty"`
+	TemplateID               int               `json:"template_id,omitempty"`        // Deprecated: legacy template identifier.
+	CustomTemplateID         string            `json:"custom_template_id,omitempty"` // Deprecated: legacy template identifier.
+	Params                   []*MarkdownParams `json:"params,omitempty"`
+	Content                  string            `json:"content,omitempty"`
+	Style                    *MarkdownStyle    `json:"style,omitempty"`
+	ProcessMsg               string            `json:"process_msg,omitempty"`
 }
 
 // MarkdownStyle markdown 样式
@@ -165,5 +170,5 @@ type InputNotify struct {
 
 // MediaInfo 富媒体信息
 type MediaInfo struct {
-	FileInfo []byte `json:"file_info,omitempty"` // 富媒体文件信息，通过上传接口取得
+	FileInfo string `json:"file_info,omitempty"` // 富媒体文件信息，通过上传接口取得
 }
