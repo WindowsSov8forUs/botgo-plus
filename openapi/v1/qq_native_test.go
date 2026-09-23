@@ -1,12 +1,15 @@
 package v1
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"mime"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -23,18 +26,54 @@ func staticSource() oauth2.TokenSource {
 func TestQQMessages(t *testing.T) {
 	ctx := context.Background()
 	message := &dto.MessageToCreate{Content: "text", MsgID: "incoming", MsgSeq: 3, MessageReference: &dto.MessageReference{MessageID: "REFIDX_quote=="}}
+	image := []byte("\x89PNG\r\n\x1a\nfixture")
 	for _, tc := range []struct {
 		name, path string
+		multipart  bool
 		send       func(*Client) (*dto.Message, error)
 	}{
-		{"group", "/v2/groups/group/messages", func(c *Client) (*dto.Message, error) { return c.PostGroupMessage(ctx, "group", message) }},
-		{"c2c", "/v2/users/user/messages", func(c *Client) (*dto.Message, error) { return c.PostC2CMessage(ctx, "user", message) }},
-		{"channel", "/channels/channel/messages", func(c *Client) (*dto.Message, error) { return c.PostMessage(ctx, "channel", message) }},
+		{"group", "/v2/groups/group/messages", false, func(c *Client) (*dto.Message, error) { return c.PostGroupMessage(ctx, "group", message) }},
+		{"c2c", "/v2/users/user/messages", false, func(c *Client) (*dto.Message, error) { return c.PostC2CMessage(ctx, "user", message) }},
+		{"channel", "/channels/channel/messages", false, func(c *Client) (*dto.Message, error) { return c.PostMessage(ctx, "channel", message) }},
+		{"channel-image", "/channels/channel/messages", true, func(c *Client) (*dto.Message, error) { return c.PostMessageMultipart(ctx, "channel", message, image) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var body dto.MessageToCreate
-				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				if tc.multipart {
+					mediaType, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+					if err != nil || mediaType != "multipart/form-data" || params["boundary"] == "" {
+						t.Errorf("content type=%q: %v", r.Header.Get("Content-Type"), err)
+						w.WriteHeader(400)
+						return
+					}
+					if err := r.ParseMultipartForm(1024); err != nil {
+						t.Error(err)
+						w.WriteHeader(400)
+						return
+					}
+					defer r.MultipartForm.RemoveAll()
+					body.Content, body.MsgID = r.FormValue("content"), r.FormValue("msg_id")
+					seq, err := strconv.ParseUint(r.FormValue("msg_seq"), 10, 32)
+					if err != nil {
+						t.Error(err)
+					}
+					body.MsgSeq = uint32(seq)
+					if err := json.Unmarshal([]byte(r.FormValue("message_reference")), &body.MessageReference); err != nil {
+						t.Error(err)
+					}
+					file, header, err := r.FormFile("file_image")
+					if err != nil {
+						t.Error(err)
+						w.WriteHeader(400)
+						return
+					}
+					defer file.Close()
+					data, err := io.ReadAll(file)
+					if err != nil || !bytes.Equal(data, image) || header.Header.Get("Content-Type") != "image/png" {
+						t.Errorf("image=%x content-type=%q: %v", data, header.Header.Get("Content-Type"), err)
+					}
+				} else if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 					t.Error(err)
 				}
 				if r.Method != "POST" || r.URL.Path != tc.path || r.Header.Get("Authorization") != "QQBot fixture" {
@@ -208,40 +247,66 @@ func (s *rotatingSource) Invalidate(old string) bool {
 }
 
 func TestAuthenticationRefresh(t *testing.T) {
-	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body dto.MessageToCreate
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Error(err)
-		}
-		if body.MsgID != "incoming" || body.MsgSeq != 3 || body.Content != "text" {
-			t.Errorf("reply=%+v", body)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		if calls.Add(1) == 1 {
-			if r.Header.Get("Authorization") != "QQBot old" {
-				t.Errorf("initial auth=%s", r.Header.Get("Authorization"))
+	for _, kind := range []string{"json", "multipart"} {
+		t.Run(kind, func(t *testing.T) {
+			var calls atomic.Int32
+			image := []byte("\x89PNG\r\n\x1a\nfixture")
+			var firstBody []byte
+			var mu sync.Mutex
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				raw, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Error(err)
+				}
+				mu.Lock()
+				if firstBody == nil {
+					firstBody = append([]byte(nil), raw...)
+				} else if !bytes.Equal(raw, firstBody) {
+					t.Errorf("authentication replay body=%q, want %q", raw, firstBody)
+				}
+				mu.Unlock()
+				if kind == "json" {
+					var body dto.MessageToCreate
+					if err := json.Unmarshal(raw, &body); err != nil {
+						t.Error(err)
+					}
+					if body.MsgID != "incoming" || body.MsgSeq != 3 || body.Content != "text" {
+						t.Errorf("reply=%+v", body)
+					}
+				}
+				w.Header().Set("Content-Type", "application/json")
+				if calls.Add(1) == 1 {
+					if r.Header.Get("Authorization") != "QQBot old" {
+						t.Errorf("initial auth=%s", r.Header.Get("Authorization"))
+					}
+					w.WriteHeader(401)
+					_, _ = io.WriteString(w, `{"code":11244}`)
+				} else {
+					if r.Header.Get("Authorization") != "QQBot new" {
+						t.Errorf("refreshed auth=%s", r.Header.Get("Authorization"))
+					}
+					_, _ = io.WriteString(w, `{"id":"sent"}`)
+				}
+			}))
+			defer server.Close()
+			client, err := New("app", &rotatingSource{current: "old"}, WithBaseURL(server.URL))
+			if err != nil {
+				t.Fatal(err)
 			}
-			w.WriteHeader(401)
-			_, _ = io.WriteString(w, `{"code":11244}`)
-		} else {
-			if r.Header.Get("Authorization") != "QQBot new" {
-				t.Errorf("refreshed auth=%s", r.Header.Get("Authorization"))
+			payload := &dto.MessageToCreate{Content: "text", MsgID: "incoming", MsgSeq: 3}
+			var message *dto.Message
+			if kind == "multipart" {
+				message, err = client.PostMessageMultipart(context.Background(), "channel", payload, image)
+			} else {
+				message, err = client.PostGroupMessage(context.Background(), "group", payload)
 			}
-			_, _ = io.WriteString(w, `{"id":"sent"}`)
-		}
-	}))
-	defer server.Close()
-	client, err := New("app", &rotatingSource{current: "old"}, WithBaseURL(server.URL))
-	if err != nil {
-		t.Fatal(err)
-	}
-	message, err := client.PostGroupMessage(context.Background(), "group", &dto.MessageToCreate{Content: "text", MsgID: "incoming", MsgSeq: 3})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if message.ID != "sent" || calls.Load() != 2 {
-		t.Fatalf("message=%+v authentication requests=%d", message, calls.Load())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if message.ID != "sent" || calls.Load() != 2 {
+				t.Fatalf("message=%+v authentication requests=%d", message, calls.Load())
+			}
+		})
 	}
 }
 

@@ -13,7 +13,7 @@ QQ 官方机器人平台的 Go 原生通信 SDK，基于 `tencent-connect/botgo`
 | Token / HTTP | 每 App 独立缓存、singleflight、显式失效、一次受控鉴权重试、同源凭证保护、结构化错误和请求级 TraceID |
 | Webhook | 完整限长读取、Ed25519、独立挑战应答、处理成功后 ACK、失败状态码、每 App 独立分发器 |
 | QQ 原生消息 | 新 OpenID / 角色 / 卡片 / 嵌套元素 / 引用索引 / 语音字段，保留完整原始载荷 |
-| 消息发送 | 原生 Markdown / Ark / Keyboard、C2C 专用流式接口、独立互动响应；回复凭据与序号由调用方填写 |
+| 消息发送 | 原生 Markdown / Ark / Keyboard、子频道本地图片 multipart、C2C 专用流式接口、独立互动响应；回复凭据与序号由调用方填写 |
 | 媒体 | URL 上传、预上传、受限并发的分片 PUT、确认、合并；Uploader 不自动发送，低层请求仅在显式设置 srv_send_msg=true 时请求发送 |
 | QQ 群 | 资料、成员详情和分页、批量移除、成员禁言；与 QQ 频道接口分开 |
 | WebSocket | 每分片会话、连接级原始事件回调、串行写、ACK 超时检测、快照状态和受控重连 |
@@ -83,6 +83,23 @@ ws := websocket.ClientImpl.New(session)
 WebSocket 回调返回错误时记录错误并继续分发，不用网关重连代替业务重试；恢复序号在回调处理后推进。队列采用上游容量的有界背压，应用不能将它当作持久队列，长期阻塞仍可能影响连接。
 
 原始 JSON 可能包含用户消息、标识和敏感扩展字段，禁止默认完整输出到日志。
+
+## 子频道本地图片
+
+通过 `NewClient` 返回的客户端调用 `PostMessageMultipart(ctx, channelID, message, imageData)`，将图片字节作为 `file_image` 直接发送到子频道。文本字段按原值提交，对象字段按 JSON 表单值提交；响应仍为 `*dto.Message`，沿用现有鉴权、错误和审核处理。
+
+```go
+imageData, err := os.ReadFile("image.png")
+if err != nil {
+    return err
+}
+sent, err := client.PostMessageMultipart(ctx, channelID, &dto.MessageToCreate{
+    Content: "图片说明",
+    MsgID:   incomingMessageID,
+}, imageData)
+```
+
+此方法使用内存中的图片及 multipart 请求体，不负责图片下载、转码或压缩。接口依据为 [QQ 子频道发送消息文档](https://bot.q.qq.com/wiki/develop/api-v2/server-inter/channel/message/send.html)。当前只提供子频道入口；频道私信 multipart 尚未验证。群聊及单聊的 `file_info` 上传使用下述媒体接口。
 
 ## 媒体上传
 
