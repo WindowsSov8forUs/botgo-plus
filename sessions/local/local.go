@@ -70,6 +70,7 @@ func (l *ChanManager) newConnect(session dto.Session) {
 		}
 	}()
 	wsClient := websocket.ClientImpl.New(session)
+	defer wsClient.Close()
 	if err := wsClient.Connect(); err != nil {
 		log.Error(err)
 		l.sessionChan <- session // 连接失败，丢回去队列排队重连
@@ -84,7 +85,8 @@ func (l *ChanManager) newConnect(session dto.Session) {
 		err = wsClient.Identify()
 	}
 	if err != nil {
-		log.Errorf("[ws/session] Identify/Resume err %+v", err)
+		log.Errorf("[ws/session] Identify/Resume failed: %v", err)
+		l.sessionChan <- *wsClient.Session()
 		return
 	}
 	if err = wsClient.Listening(); err != nil {
@@ -99,7 +101,7 @@ func (l *ChanManager) newConnect(session dto.Session) {
 		if manager.CanNotIdentify(err) {
 			msg := fmt.Sprintf("can not identify because server return %+v, so process exit", err)
 			log.Errorf(msg)
-			panic(msg) // 当机器人被下架，或者封禁，将不能再连接，所以 panic
+			return // Stop this shard instead of recovering a panic and endlessly requeueing a banned bot.
 		}
 		// 将 session 放到 session chan 中，用于启动新的连接，当前连接退出
 		l.sessionChan <- *currentSession
