@@ -2,6 +2,7 @@
 package errs
 
 import (
+	"errors"
 	"fmt"
 )
 
@@ -84,8 +85,18 @@ func New(code int, text string, trace ...string) error {
 
 // Error 将错误转换为 sdk 的错误类型
 func Error(err error) *Err {
-	if e, ok := err.(*Err); ok {
-		return e
+	if err == nil {
+		return nil
+	}
+	var legacy *Err
+	if errors.As(err, &legacy) {
+		return legacy
+	}
+	var api *APIError
+	if errors.As(err, &api) {
+		// Preserve the historical HTTP status returned by Code(). The QQ business
+		// error code remains available through errors.As(err, *APIError).
+		return &Err{code: api.StatusCode, text: api.Error(), trace: api.TraceID}
 	}
 	return &Err{
 		code: 9999,

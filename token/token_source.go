@@ -1,39 +1,40 @@
-// Package token 基于 golang.org/x/oauth2 标准实现token source
+// Package token implements QQ access-token acquisition and concurrency-safe invalidation.
 package token
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
-	"math/rand"
-	"net/http"
-	"strconv"
-	"sync/atomic"
-	"time"
-
 	"github.com/WindowsSov8forUs/botgo-plus/constant"
+	"github.com/WindowsSov8forUs/botgo-plus/errs"
 	"github.com/WindowsSov8forUs/botgo-plus/log"
 	"golang.org/x/oauth2"
 	"golang.org/x/sync/singleflight"
+	"io"
+	"math/rand"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 )
 
 const (
-	// TypeBearer ..
-	TypeBearer string = "Bearer"
-	// TypeQQBot ..
-	TypeQQBot string = "QQBot"
-
-	defaultExpiryDeltaMillSec  = 9000 // 与oauth2.defaultExpiryDelta - time.Second
-	randTimeUpperLimitMilliSec = 500  // 随机时间区间Sec
+	TypeBearer = "Bearer"
+	TypeQQBot  = "QQBot"
 )
 
+type QQBotCredentials struct {
+	AppID     string `yaml:"appid"`
+	AppSecret string `yaml:"secret"`
+}
 type qqBotTokenReq struct {
 	AppID        string `json:"appId"`
 	ClientSecret string `json:"clientSecret"`
 }
-
 type qqBotTokenRsp struct {
 	Code        int    `json:"code"`
 	Message     string `json:"message"`
@@ -42,201 +43,233 @@ type qqBotTokenRsp struct {
 }
 
 func (r *qqBotTokenRsp) UnmarshalJSON(data []byte) error {
-	// 创建一个临时结构体来解析 JSON 数据
-	var temp struct {
-		Code        int    `json:"code"`
-		Message     string `json:"message"`
-		AccessToken string `json:"access_token"`
-		ExpiresIn   string `json:"expires_in"`
+	var raw struct {
+		Code        int             `json:"code"`
+		Message     string          `json:"message"`
+		AccessToken string          `json:"access_token"`
+		ExpiresIn   json.RawMessage `json:"expires_in"`
 	}
-
-	// 解析 JSON 数据到临时结构体
-	if err := json.Unmarshal(data, &temp); err != nil {
+	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
-
-	// 将字符串转换为 int64
-	expiresIn, err := strconv.ParseInt(temp.ExpiresIn, 10, 64)
+	*r = qqBotTokenRsp{Code: raw.Code, Message: raw.Message, AccessToken: raw.AccessToken}
+	if len(raw.ExpiresIn) == 0 || string(raw.ExpiresIn) == "null" {
+		return nil
+	}
+	value := string(raw.ExpiresIn)
+	if raw.ExpiresIn[0] == '"' {
+		if err := json.Unmarshal(raw.ExpiresIn, &value); err != nil {
+			return err
+		}
+	}
+	n, err := strconv.ParseInt(value, 10, 64)
 	if err != nil {
-		return err
+		return fmt.Errorf("invalid expires_in: %w", err)
 	}
-
-	// 赋值给结构体字段
-	r.ExpiresIn = expiresIn
-	r.Code = temp.Code
-	r.Message = temp.Message
-	r.AccessToken = temp.AccessToken
+	r.ExpiresIn = n
 	return nil
 }
 
-// QQBotCredentials QQ机器人appid、secret
-type QQBotCredentials struct {
-	AppID     string `yaml:"appid"`
-	AppSecret string `yaml:"secret"`
+type Option func(*QQBotTokenSource)
+
+func WithEndpoint(endpoint string) Option { return func(s *QQBotTokenSource) { s.endpoint = endpoint } }
+func WithHTTPClient(client *http.Client) Option {
+	return func(s *QQBotTokenSource) { s.client = client }
+}
+func WithRequestTimeout(timeout time.Duration) Option {
+	return func(s *QQBotTokenSource) { s.timeout = timeout }
 }
 
-// QQBotTokenSource QQ机器人token source
+// QQBotTokenSource caches immutable token copies. Construct one source per QQ application.
 type QQBotTokenSource struct {
-	credentials *QQBotCredentials
-	cachedToken atomic.Value
+	credentials QQBotCredentials
+	mu          sync.Mutex
+	cached      *oauth2.Token
 	sg          singleflight.Group
+	endpoint    string
+	client      *http.Client
+	timeout     time.Duration
 }
 
-// NewQQBotTokenSource 初始化
-func NewQQBotTokenSource(credentials *QQBotCredentials) oauth2.TokenSource {
-	return &QQBotTokenSource{
-		credentials: credentials,
+// NewQQBotTokenSource creates a source with optional endpoint, HTTP client and timeout configuration.
+// It performs no network requests until a token is requested. The returned source implements
+// oauth2.TokenSource and exposes TokenContext and Invalidate directly.
+func NewQQBotTokenSource(credentials *QQBotCredentials, options ...Option) *QQBotTokenSource {
+	s := &QQBotTokenSource{endpoint: getTokenURL(), client: &http.Client{}, timeout: 10 * time.Second}
+	if credentials != nil {
+		s.credentials = *credentials
 	}
+	for _, o := range options {
+		o(s)
+	}
+	if s.client == nil {
+		s.client = &http.Client{}
+	}
+	c := *s.client
+	// Never redirect the application secret.
+	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	s.client = &c
+	if s.timeout <= 0 {
+		s.timeout = 10 * time.Second
+	}
+	return s
 }
-
-// Token 获取access token
-func (w *QQBotTokenSource) Token() (*oauth2.Token, error) {
-	rawToken := w.cachedToken.Load()
-	if rawToken != nil && rawToken.(*oauth2.Token).Valid() {
-		token, ok := rawToken.(*oauth2.Token)
-		if ok && token.Valid() {
-			return token, nil
+func (s *QQBotTokenSource) cachedToken() *oauth2.Token {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.cached.Valid() {
+		return nil
+	}
+	t := *s.cached
+	return &t
+}
+func (s *QQBotTokenSource) Token() (*oauth2.Token, error) {
+	return s.TokenContext(context.Background())
+}
+func (s *QQBotTokenSource) TokenContext(ctx context.Context) (*oauth2.Token, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if t := s.cachedToken(); t != nil {
+		return t, nil
+	}
+	ch := s.sg.DoChan("access-token", func() (interface{}, error) {
+		if t := s.cachedToken(); t != nil {
+			return t, nil
 		}
-	}
-	// 获取新的access rawToken
-	newToken, err, shard := w.sg.Do("retrieve access rawToken", func() (interface{}, error) {
-		return w.getNewToken()
+		// A canceled waiter does not cancel the bounded refresh shared with other callers.
+		shared, cancel := context.WithTimeout(context.Background(), s.timeout)
+		defer cancel()
+		t, err := s.retrieve(shared)
+		if err != nil {
+			return nil, err
+		}
+		s.mu.Lock()
+		s.cached = t
+		s.mu.Unlock()
+		return t, nil
 	})
-	log.Debugf("shared flight:%v", shard)
-	if err != nil {
-		return nil, err
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case r := <-ch:
+		if r.Err != nil {
+			return nil, r.Err
+		}
+		t := *(r.Val.(*oauth2.Token))
+		return &t, nil
 	}
-	w.cachedToken.Store(newToken)
-	return newToken.(*oauth2.Token), nil
 }
 
-func (w *QQBotTokenSource) getNewToken() (*oauth2.Token, error) {
-	retrieveReq := qqBotTokenReq{
-		AppID:        w.credentials.AppID,
-		ClientSecret: w.credentials.AppSecret,
+// Invalidate never clears a newer token when an older in-flight request is rejected.
+func (s *QQBotTokenSource) Invalidate(rejected string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cached != nil && s.cached.AccessToken == rejected {
+		s.cached = nil
+		return true
 	}
-	data, err := json.Marshal(retrieveReq)
-	if err != nil {
-		return nil, err
-	}
-	payload := bytes.NewReader(data)
-	log.Debugf("retrieve access token URL:%v req:%v", getTokenURL(), string(data))
-	req, err := http.NewRequest(http.MethodPost, getTokenURL(), payload)
-	if err != nil {
-		log.Errorf("init http req failed:%v", err)
-		return nil, err
-	}
-	req.Header.Add("Content-Type", "application/json")
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-	}
-	rsp, err := client.Do(req)
-	if err != nil {
-		log.Errorf("retrieve token failed:%v", err)
-		return nil, err
-	}
-	defer func() {
-		_ = rsp.Body.Close()
-	}()
-	rspTraceID := rsp.Header.Get(constant.HeaderTraceID)
-	body, err := io.ReadAll(rsp.Body)
-	if err != nil {
-		log.Errorf("read rsp failed:%v", err)
-		return nil, err
-	}
-	log.Debugf("access token:%v traceID:%v", string(body), rspTraceID)
-	retrieveRsp := &qqBotTokenRsp{}
-	if err = json.Unmarshal(body, retrieveRsp); err != nil {
-		log.Errorf("unmarshal rsp failed:%v traceID:%v", err, rspTraceID)
-		return nil, err
-	}
-	if retrieveRsp.Code != 0 {
-		log.Errorf("query acessToken err:%v.%v traceID:%v", retrieveRsp.Code, retrieveRsp.Message, rspTraceID)
-		return nil, fmt.Errorf("%v.%v", retrieveRsp.Code, retrieveRsp.Message)
-	}
-	expiry := time.Now().Add(time.Duration(retrieveRsp.ExpiresIn) * time.Second)
-	return &oauth2.Token{
-		AccessToken: retrieveRsp.AccessToken,
-		TokenType:   TypeQQBot,
-		Expiry:      expiry,
-		ExpiresIn:   retrieveRsp.ExpiresIn,
-	}, nil
+	return false
 }
-
-// GetAppID 获取appid
-func (w *QQBotTokenSource) GetAppID() string {
-	if w == nil || w.credentials == nil {
+func (s *QQBotTokenSource) retrieve(ctx context.Context) (*oauth2.Token, error) {
+	if s.credentials.AppID == "" || s.credentials.AppSecret == "" {
+		return nil, errors.New("QQ app ID and secret are required")
+	}
+	u, err := url.Parse(s.endpoint)
+	if err != nil || u.Host == "" || u.User != nil || (u.Scheme != "https" && u.Scheme != "http") {
+		return nil, errors.New("invalid QQ token endpoint")
+	}
+	body, _ := json.Marshal(qqBotTokenReq{AppID: s.credentials.AppID, ClientSecret: s.credentials.AppSecret})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > 1024*1024 {
+		return nil, errors.New("QQ token response too large")
+	}
+	if err := errs.CheckAPIResponse(resp.StatusCode, resp.Header, data); err != nil {
+		return nil, err
+	}
+	var result qqBotTokenRsp
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("decode token response: %w", err)
+	}
+	if result.AccessToken == "" || result.ExpiresIn <= 0 || result.ExpiresIn > int64(time.Duration(1<<63-1)/time.Second) {
+		return nil, errors.New("invalid token or expiry in QQ response")
+	}
+	return &oauth2.Token{AccessToken: result.AccessToken, TokenType: TypeQQBot, ExpiresIn: result.ExpiresIn, Expiry: time.Now().Add(time.Duration(result.ExpiresIn) * time.Second)}, nil
+}
+func (s *QQBotTokenSource) GetAppID() string {
+	if s == nil {
 		return ""
 	}
-	return w.credentials.AppID
+	return s.credentials.AppID
+}
+func TokenContext(ctx context.Context, source oauth2.TokenSource) (*oauth2.Token, error) {
+	if source == nil {
+		return nil, errors.New("nil token source")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if s, ok := source.(interface {
+		TokenContext(context.Context) (*oauth2.Token, error)
+	}); ok {
+		return s.TokenContext(ctx)
+	}
+	return source.Token()
 }
 
-// StartRefreshAccessToken 启动获取AccessToken的后台刷新
-func StartRefreshAccessToken(ctx context.Context, tokenSource oauth2.TokenSource) error {
-	tk, err := tokenSource.Token()
+// StartRefreshAccessToken retains upstream's 9-9.5s lead and one-second failure retry.
+// Schedule from the token's remaining lifetime, not its original expires_in.
+func StartRefreshAccessToken(ctx context.Context, source oauth2.TokenSource) error {
+	tk, err := TokenContext(ctx, source)
 	if err != nil {
 		return err
 	}
-	log.Debugf("token:%+v ", tk)
+	if tk == nil {
+		return errors.New("token source returned a nil token")
+	}
 	go func() {
-		var consecutiveFailures int
 		for {
-			var refreshMilliSec int64
-			//上一轮获取 tk 失败
-			if tk == nil {
-				if consecutiveFailures > 10 {
-					panic("get token failed continuously for more than ten times")
+			wait := time.Second
+			if tk != nil {
+				if tk.Expiry.IsZero() {
+					return // oauth2 treats a zero expiry as non-expiring.
 				}
-				consecutiveFailures++
-				refreshMilliSec = 1000 // 1000ms后重试
-			} else {
-				consecutiveFailures = 0
-				refreshMilliSec = getRefreshMilliSec(tk.ExpiresIn)
+				// oauth2.Token.Valid uses a 10s margin; this timer runs just after
+				// that cache threshold. Package-level rand is safe across sources.
+				wait = time.Until(tk.Expiry) - 9*time.Second - time.Duration(rand.Int63n(500))*time.Millisecond
+				if wait < time.Second {
+					wait = time.Second
+				}
 			}
-			log.Debugf("refresh after %d milli sec", refreshMilliSec)
-			timer := time.NewTimer(time.Duration(refreshMilliSec) * time.Millisecond)
+			timer := time.NewTimer(wait)
 			select {
-			case <-timer.C:
-				{
-					log.Debugf("start to refresh access token %s", time.Now().Format(time.StampMilli))
-					tk, err = tokenSource.Token()
-					if err != nil {
-						log.Errorf("refresh access token failed:%s", err)
-					}
-					timer.Stop()
-				}
 			case <-ctx.Done():
-				{
-					log.Warnf("recv ctx:%v exit refresh token", ctx.Err())
-					timer.Stop()
-					return
-				}
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			tk, err = TokenContext(ctx, source)
+			if err != nil {
+				tk = nil
+				log.Warnf("QQ token refresh failed; retrying in one second")
 			}
 		}
 	}()
 	return nil
 }
-
-var (
-	r = rand.New(rand.NewSource(time.Now().Unix()))
-)
-
-// getRefreshSec 为token刷新保留提前量。避免由于网络延迟等原因导致的token刷新不及时。
-func getRefreshMilliSec(tokenTTLSec int64) int64 {
-	refreshMilliSec := tokenTTLSec * 1000
-	if refreshMilliSec < defaultExpiryDeltaMillSec {
-		return refreshMilliSec
-	}
-	refreshMilliSec -= defaultExpiryDeltaMillSec
-	// 随机化，避免所有机器人都同时获取access_token
-	if refreshMilliSec > randTimeUpperLimitMilliSec {
-		rand := r.Int63n(randTimeUpperLimitMilliSec)
-		log.Debugf("rand:%d", rand)
-		refreshMilliSec -= rand
-	}
-	return refreshMilliSec
-}
-
 func getTokenURL() string {
-	return fmt.Sprintf("%v%v", constant.TokenDomain, "/app/getAppAccessToken")
+	return strings.TrimRight(constant.TokenDomain, "/") + "/app/getAppAccessToken"
 }

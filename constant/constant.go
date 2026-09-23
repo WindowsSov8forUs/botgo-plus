@@ -5,10 +5,10 @@ package constant
 const HeaderTraceID = "X-Tps-trace-ID"
 
 // APIDomain api domain
-var APIDomain = "https://api.sgroup.qq.com"
+var APIDomain = "https://api.bot.qq.com"
 
 // SandBoxAPIDomain sandbox domain
 var SandBoxAPIDomain = "https://sandbox.api.sgroup.qq.com"
 
 // TokenDomain token domain
-var TokenDomain = "https://bots.qq.com"
+var TokenDomain = "https://api.bot.qq.com"
