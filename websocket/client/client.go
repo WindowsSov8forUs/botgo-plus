@@ -330,12 +330,20 @@ func (c *Client) listenMessageAndHandle() {
 			}
 			// Refresh the snapshot at dispatch time: READY may have been queued before this event.
 			payload.Session = c.Session()
-			if payload.Type == "READY" {
+			ready := payload.Type == "READY"
+			if ready {
 				if err := c.readyHandler(payload); err != nil {
 					c.notify(err)
 					return
 				}
-			} else if err := event.ParseAndHandle(payload); err != nil {
+			}
+			var err error
+			if handler := payload.Session.EventHandler; handler != nil {
+				err = handler(c.ctx, payload)
+			} else if !ready {
+				err = event.ParseAndHandle(payload)
+			}
+			if err != nil {
 				// Preserve upstream behavior: report the application error and continue.
 				// Business retries are not implemented by reconnecting the QQ gateway.
 				log.Errorf("QQ event handler failed: %v", err)
@@ -403,7 +411,7 @@ func (c *Client) readyHandler(payload *dto.WSPayload) error {
 	c.user = &dto.WSUser{ID: ready.User.ID, Username: ready.User.Username, Bot: ready.User.Bot}
 	c.stateMu.Unlock()
 	payload.Session = c.Session()
-	if event.DefaultHandlers.Ready != nil {
+	if payload.Session.EventHandler == nil && event.DefaultHandlers.Ready != nil {
 		event.DefaultHandlers.Ready(payload, &ready)
 	}
 	return nil
