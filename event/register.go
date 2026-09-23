@@ -6,9 +6,13 @@ import (
 
 // DefaultHandlers 默认的 handler 结构，管理所有支持的 handler 类型
 var DefaultHandlers struct {
-	Ready       ReadyHandler
-	ErrorNotify ErrorNotifyHandler
-	Plain       PlainEventHandler
+	GroupMessage     GroupMessageEventHandler
+	GroupRobot       GroupRobotEventHandler
+	GroupMember      GroupMemberEventHandler
+	GroupJoinRequest GroupJoinRequestEventHandler
+	Ready            ReadyHandler
+	ErrorNotify      ErrorNotifyHandler
+	Plain            PlainEventHandler
 
 	Guild       GuildEventHandler
 	GuildMember GuildMemberEventHandler
@@ -127,6 +131,18 @@ func RegisterHandlers(handlers ...interface{}) dto.Intent {
 	var i dto.Intent
 	for _, h := range handlers {
 		switch handle := h.(type) {
+		case GroupMessageEventHandler:
+			DefaultHandlers.GroupMessage = handle
+			i |= dto.IntentGroupMessages
+		case GroupRobotEventHandler:
+			DefaultHandlers.GroupRobot = handle
+			i |= dto.IntentGroupMessages
+		case GroupMemberEventHandler:
+			DefaultHandlers.GroupMember = handle
+			i |= dto.IntentGroupMembers
+		case GroupJoinRequestEventHandler:
+			DefaultHandlers.GroupJoinRequest = handle
+			i |= dto.IntentGroupMembers
 		case ReadyHandler:
 			DefaultHandlers.Ready = handle
 		case ErrorNotifyHandler:
