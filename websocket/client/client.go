@@ -1,300 +1,410 @@
-// Package client 默认的 websocket client 实现。
+// Package client implements one native QQ WebSocket connection per shard.
 package client
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/signal"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
-	wss "github.com/gorilla/websocket" // 是一个流行的 websocket 客户端，服务端实现
 	"github.com/WindowsSov8forUs/botgo-plus/dto"
 	"github.com/WindowsSov8forUs/botgo-plus/errs"
 	"github.com/WindowsSov8forUs/botgo-plus/event"
 	"github.com/WindowsSov8forUs/botgo-plus/log"
+	"github.com/WindowsSov8forUs/botgo-plus/token"
 	"github.com/WindowsSov8forUs/botgo-plus/websocket"
+	wss "github.com/gorilla/websocket"
 )
 
-// DefaultQueueSize 监听队列的缓冲长度
+// DefaultQueueSize retains the upstream queue capacity. A full queue applies backpressure.
 const DefaultQueueSize = 10000
-
-// Setup 依赖注册
-func Setup() {
-	websocket.Register(&Client{})
-}
-
-// New 新建一个连接对象
-func (c *Client) New(session dto.Session) websocket.WebSocket {
-	return &Client{
-		messageQueue:    make(messageChan, DefaultQueueSize),
-		session:         &session,
-		closeChan:       make(closeErrorChan, 10),
-		heartBeatTicker: time.NewTicker(60 * time.Second), // 先给一个默认 ticker，在收到 hello 包之后，会 reset
-	}
-}
-
-// Client websocket 连接客户端
-type Client struct {
-	version         int
-	conn            *wss.Conn
-	messageQueue    messageChan
-	session         *dto.Session
-	user            *dto.WSUser
-	closeChan       closeErrorChan
-	heartBeatTicker *time.Ticker // 用于维持定时心跳
-}
+const maxFrameBytes int64 = 4 * 1024 * 1024
 
 type messageChan chan *dto.WSPayload
 type closeErrorChan chan error
 
-// Connect 连接到 websocket
+type Client struct {
+	stateMu          sync.RWMutex
+	session          *dto.Session
+	version          int
+	user             *dto.WSUser
+	connMu           sync.RWMutex
+	conn             *wss.Conn
+	writeMu          sync.Mutex
+	messageQueue     messageChan
+	closeChan        closeErrorChan
+	heartBeatTicker  *time.Ticker
+	heartbeatPending atomic.Bool
+	receivedSeq      atomic.Uint32
+	lastToken        atomic.Value
+	closed           atomic.Bool
+	listening        atomic.Bool
+	closeOnce        sync.Once
+	ctx              context.Context
+	cancel           context.CancelFunc
+}
+
+func Setup() { websocket.Register(&Client{}) }
+
+func (c *Client) New(session dto.Session) websocket.WebSocket {
+	if session.AppID == "" {
+		if source, ok := session.TokenSource.(interface{ GetAppID() string }); ok {
+			session.AppID = source.GetAppID()
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	if session.Shards.ShardCount == 0 {
+		session.Shards.ShardCount = 1
+	}
+	if session.Intent == 0 {
+		session.Intent = dto.IntentGuilds
+	}
+	result := &Client{session: &session, messageQueue: make(messageChan, DefaultQueueSize), closeChan: make(closeErrorChan, 2), heartBeatTicker: time.NewTicker(60 * time.Second), ctx: ctx, cancel: cancel}
+	result.receivedSeq.Store(session.LastSeq)
+	return result
+}
+
+func (c *Client) connection() *wss.Conn { c.connMu.RLock(); defer c.connMu.RUnlock(); return c.conn }
+
+// Session returns a snapshot. Mutating it never changes an active connection.
+func (c *Client) Session() *dto.Session {
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	if c.session == nil {
+		return &dto.Session{}
+	}
+	copy := *c.session
+	return &copy
+}
+
 func (c *Client) Connect() error {
-	if c.session.URL == "" {
+	if c.closed.Load() || c.ctx == nil {
+		return errors.New("create a new QQ connection before Connect")
+	}
+	session := c.Session()
+	u, err := url.Parse(session.URL)
+	if err != nil || u.Host == "" || u.User != nil || (u.Scheme != "ws" && u.Scheme != "wss") {
 		return errs.ErrURLInvalid
 	}
-
-	var err error
-	c.conn, _, err = wss.DefaultDialer.Dial(c.session.URL, nil)
+	if session.Shards.ShardID >= session.Shards.ShardCount {
+		return errors.New("invalid shard configuration")
+	}
+	dialer := *wss.DefaultDialer
+	dialer.HandshakeTimeout = 10 * time.Second
+	conn, response, err := dialer.DialContext(c.ctx, session.URL, nil)
+	if response != nil && response.Body != nil && err != nil {
+		response.Body.Close()
+	}
 	if err != nil {
-		log.Errorf("%s, connect err: %v", c.session, err)
 		return err
 	}
-	log.Infof("%s, url %s, connected", c.session, c.session.URL)
-
+	conn.SetReadLimit(maxFrameBytes)
+	_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	c.connMu.Lock()
+	if c.closed.Load() || c.conn != nil {
+		c.connMu.Unlock()
+		conn.Close()
+		return errors.New("QQ connection is closed or already connected")
+	}
+	c.conn = conn
+	c.connMu.Unlock()
+	log.Infof("%s connected", session)
 	return nil
 }
 
-// Listening 开始监听，会阻塞进程，内部会从事件队列不断的读取事件，解析后投递到注册的 event handler，如果读取消息过程中发生错误，会循环
-// 定时心跳也在这里维护
-func (c *Client) Listening() error {
-	defer c.Close()
-	// reading message
-	go c.readMessageToQueue()
-	// read message from queue and handle,in goroutine to avoid business logic block closeChan and heartBeatTicker
-	go c.listenMessageAndHandle()
+func (c *Client) notify(err error) {
+	select {
+	case c.closeChan <- err:
+	default:
+	}
+}
 
-	// 接收 resume signal
+func (c *Client) Listening() error {
+	if c.connection() == nil || c.closed.Load() {
+		return errors.New("QQ connection is not open")
+	}
+	if !c.listening.CompareAndSwap(false, true) {
+		return errors.New("Listening may only be called once")
+	}
+	defer c.Close()
+	go c.readMessageToQueue()
+	go c.listenMessageAndHandle()
 	resumeSignal := make(chan os.Signal, 1)
 	if websocket.ResumeSignal >= syscall.SIGHUP {
 		signal.Notify(resumeSignal, websocket.ResumeSignal)
+		defer signal.Stop(resumeSignal)
 	}
-
-	// handler message
 	for {
 		select {
-		case <-resumeSignal: // 使用信号量控制连接立即重连
-			log.Infof("%s, received resumeSignal signal", c.session)
+		case <-c.ctx.Done():
+			return c.ctx.Err()
+		case <-resumeSignal:
 			return errs.ErrNeedReConnect
 		case err := <-c.closeChan:
-			// 关闭连接的错误码 https://bot.q.qq.com/wiki/develop/api/gateway/error/error.html
-			log.Errorf("%s Listening stop. err is %v", c.session, err)
-			// 不能够 identify 的错误
-			if wss.IsCloseError(err, errs.WSCodeBackendBotOffline, errs.WSCodeBackendBotBanned) {
-				err = errs.New(errs.CodeConnCloseCantIdentify, err.Error())
-			}
-			// accessToken过期
-			if wss.IsCloseError(err, errs.WSCodeBackendAuthenticationFail) {
-				_, _ = c.session.TokenSource.Token()
-			}
-			// 这里用 UnexpectedCloseError，如果有需要排除在外的 close error code，可以补充在第二个参数上
-			// 4009: session time out, 发了 reconnect 之后马上关闭连接时候的错误码，这个是允许 resumeSignal 的
-			if wss.IsUnexpectedCloseError(err, errs.WSCodeBackendSessionTimeOut) {
-				err = errs.New(errs.CodeConnCloseCantResume, err.Error())
-			}
+			err = c.classifyClose(err)
 			if event.DefaultHandlers.ErrorNotify != nil {
-				// 通知到使用方错误
 				event.DefaultHandlers.ErrorNotify(err)
 			}
 			return err
 		case <-c.heartBeatTicker.C:
-			log.Debugf("%s listened heartBeat", c.session)
-			heartBeatEvent := &dto.WSPayload{
-				WSPayloadBase: dto.WSPayloadBase{
-					OPCode: dto.WSHeartbeat,
-				},
-				Data: c.session.LastSeq,
+			if err := c.heartbeatTick(); err != nil {
+				return err
 			}
-			// 不处理错误，Write 内部会处理，如果发生发包异常，会通知主协程退出
-			_ = c.Write(heartBeatEvent)
 		}
 	}
 }
 
-// Write 往 ws 写入数据
-func (c *Client) Write(message *dto.WSPayload) error {
-	m, _ := json.Marshal(message)
-	log.Infof("%s write %s message, %v", c.session, dto.OPMeans(message.OPCode), string(m))
+func (c *Client) classifyClose(err error) error {
+	if wss.IsCloseError(err, errs.WSCodeBackendBotOffline, errs.WSCodeBackendBotBanned) {
+		return errs.New(errs.CodeConnCloseCantIdentify, "QQ bot is offline or banned")
+	}
+	if wss.IsCloseError(err, errs.WSCodeBackendAuthenticationFail) {
+		if invalidator, ok := c.Session().TokenSource.(interface{ Invalidate(string) bool }); ok {
+			if rejected, ok := c.lastToken.Load().(string); ok {
+				invalidator.Invalidate(rejected)
+			}
+		}
+		return errs.New(errs.CodeConnCloseCantResume, "QQ gateway rejected authentication")
+	}
+	var closed *wss.CloseError
+	if errors.As(err, &closed) && closed.Code >= 4000 && closed.Code != errs.WSCodeBackendSessionTimeOut {
+		return errs.New(errs.CodeConnCloseCantResume, fmt.Sprintf("QQ gateway close code %d", closed.Code))
+	}
+	return err
+}
 
-	if err := c.conn.WriteMessage(wss.TextMessage, m); err != nil {
-		log.Errorf("%s WriteMessage failed, %v", c.session, err)
-		c.closeChan <- err
+func (c *Client) heartbeatTick() error {
+	if c.heartbeatPending.Swap(true) {
+		return errs.ErrNeedReConnect
+	}
+	return c.Write(&dto.WSPayload{WSPayloadBase: dto.WSPayloadBase{OPCode: dto.WSHeartbeat}, Data: c.receivedSeq.Load()})
+}
+
+func (c *Client) Write(message *dto.WSPayload) error {
+	if message == nil {
+		return errors.New("nil QQ gateway payload")
+	}
+	data, err := json.Marshal(message)
+	if err != nil {
+		return err
+	}
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	conn := c.connection()
+	if conn == nil || c.closed.Load() {
+		return errors.New("QQ connection is not open")
+	}
+	if err := conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		c.notify(err)
+		return err
+	}
+	// Never log IDENTIFY/RESUME tokens or raw event bodies.
+	log.Debugf("%s write opcode=%d bytes=%d", c.Session(), message.OPCode, len(data))
+	if err := conn.WriteMessage(wss.TextMessage, data); err != nil {
+		c.notify(err)
 		return err
 	}
 	return nil
 }
 
-// Resume 重连
+func (c *Client) authorization() (string, error) {
+	if c.ctx == nil {
+		return "", errors.New("create a new QQ connection before authenticating")
+	}
+	tk, err := token.TokenContext(c.ctx, c.Session().TokenSource)
+	if err != nil {
+		return "", err
+	}
+	if tk == nil || tk.AccessToken == "" {
+		return "", errors.New("empty QQ gateway token")
+	}
+	c.lastToken.Store(tk.AccessToken)
+	scheme := tk.TokenType
+	if scheme == "" {
+		scheme = token.TypeQQBot
+	}
+	return scheme + " " + tk.AccessToken, nil
+}
+
 func (c *Client) Resume() error {
-	token, err := c.session.TokenSource.Token()
+	auth, err := c.authorization()
 	if err != nil {
-		log.Errorf("[resume] get access token failed:%s", err)
 		return err
 	}
-	payload := &dto.WSPayload{
-		Data: &dto.WSResumeData{
-			Token:     token.AccessToken,
-			SessionID: c.session.ID,
-			Seq:       c.session.LastSeq,
-		},
+	session := c.Session()
+	if session.ID == "" {
+		return errors.New("resume requires a QQ session ID")
 	}
-	payload.OPCode = dto.WSResume // 内嵌结构体字段，单独赋值
-	return c.Write(payload)
+	return c.Write(&dto.WSPayload{WSPayloadBase: dto.WSPayloadBase{OPCode: dto.WSResume}, Data: &dto.WSResumeData{Token: auth, SessionID: session.ID, Seq: session.LastSeq}})
 }
-
-// Identify 对一个连接进行鉴权，并声明监听的 shard 信息
 func (c *Client) Identify() error {
-	// 避免传错 intent
-	if c.session.Intent == 0 {
-		c.session.Intent = dto.IntentGuilds
-	}
-	tk, err := c.session.TokenSource.Token()
+	auth, err := c.authorization()
 	if err != nil {
-		log.Errorf("[resume] get access token failed:%s", err)
 		return err
 	}
-	payload := &dto.WSPayload{
-		Data: &dto.WSIdentityData{
-			Token:   fmt.Sprintf("%s %s", tk.TokenType, tk.AccessToken),
-			Intents: c.session.Intent,
-			Shard: []uint32{
-				c.session.Shards.ShardID,
-				c.session.Shards.ShardCount,
-			},
-		},
-	}
-	payload.OPCode = dto.WSIdentity
-	return c.Write(payload)
+	session := c.Session()
+	return c.Write(&dto.WSPayload{WSPayloadBase: dto.WSPayloadBase{OPCode: dto.WSIdentity}, Data: &dto.WSIdentityData{Token: auth, Intents: session.Intent, Shard: []uint32{session.Shards.ShardID, session.Shards.ShardCount}}})
 }
 
-// Close 关闭连接
 func (c *Client) Close() {
-	if err := c.conn.Close(); err != nil {
-		log.Errorf("%s, close conn err: %v", c.session, err)
-	}
-	c.heartBeatTicker.Stop()
-}
-
-// Session 获取client的session信息
-func (c *Client) Session() *dto.Session {
-	return c.session
+	c.closeOnce.Do(func() {
+		// Serialize closure with all session writes so snapshots stay frozen after Close returns.
+		c.stateMu.Lock()
+		c.closed.Store(true)
+		c.stateMu.Unlock()
+		if c.cancel != nil {
+			c.cancel()
+		}
+		if conn := c.connection(); conn != nil {
+			_ = conn.Close()
+		}
+		if c.heartBeatTicker != nil {
+			c.heartBeatTicker.Stop()
+		}
+	})
 }
 
 func (c *Client) readMessageToQueue() {
+	defer close(c.messageQueue)
+	conn := c.connection()
 	for {
-		_, message, err := c.conn.ReadMessage()
+		_, raw, err := conn.ReadMessage()
 		if err != nil {
-			log.Errorf("%s read message failed, %v, message %s", c.session, err, string(message))
-			close(c.messageQueue)
-			// accessToken过期
-			if wss.IsCloseError(err, errs.WSCodeBackendAuthenticationFail) {
-				_, _ = c.session.TokenSource.Token()
-			}
-			c.closeChan <- err
+			c.notify(err)
+			return
+		}
+		var envelope struct {
+			Op *dto.OPCode `json:"op"`
+		}
+		if json.Unmarshal(raw, &envelope) != nil || envelope.Op == nil {
+			c.notify(errors.New("malformed QQ gateway payload"))
 			return
 		}
 		payload := &dto.WSPayload{}
-		if err := json.Unmarshal(message, payload); err != nil {
-			log.Errorf("%s json failed, %v", c.session, err)
-			continue
+		if err := json.Unmarshal(raw, payload); err != nil {
+			c.notify(err)
+			return
 		}
-		payload.RawMessage = message
-		payload.Session = c.session
-		log.Infof("%s receive %s message, %s", c.session, dto.OPMeans(payload.OPCode), string(message))
-		// 处理内置的一些事件，如果处理成功，则这个事件不再投递给业务
+		payload.RawMessage = raw
+		payload.Session = c.Session()
+		if payload.OPCode == dto.WSDispatchEvent {
+			c.receivedSeq.Store(payload.Seq)
+		}
 		if c.isHandleBuildIn(payload) {
 			continue
 		}
-		c.messageQueue <- payload
+		select {
+		case <-c.ctx.Done():
+			return
+		case c.messageQueue <- payload:
+		}
 	}
 }
 
 func (c *Client) listenMessageAndHandle() {
 	defer func() {
-		// panic，一般是由于业务自己实现的 handle 不完善导致
-		// 打印日志后，关闭这个连接，进入重连流程
-		if err := recover(); err != nil {
-			websocket.PanicHandler(err, c.session)
-			c.closeChan <- fmt.Errorf("panic: %v", err)
+		if recover() != nil {
+			c.notify(errors.New("QQ event handler panicked"))
 		}
 	}()
-	for payload := range c.messageQueue {
-		c.saveSeq(payload.Seq)
-		// ready 事件需要特殊处理
-		if payload.Type == "READY" {
-			c.readyHandler(payload)
-			continue
+	for {
+		if c.ctx.Err() != nil {
+			return
 		}
-		// 解析具体事件，并投递给业务注册的 handler
-		if err := event.ParseAndHandle(payload); err != nil {
-			log.Errorf("%s parseAndHandle failed, %v", c.session, err)
+		select {
+		case <-c.ctx.Done():
+			return
+		case payload, open := <-c.messageQueue:
+			if !open {
+				return
+			}
+			if c.ctx.Err() != nil {
+				return
+			}
+			// Refresh the snapshot at dispatch time: READY may have been queued before this event.
+			payload.Session = c.Session()
+			if payload.Type == "READY" {
+				if err := c.readyHandler(payload); err != nil {
+					c.notify(err)
+					return
+				}
+			} else if err := event.ParseAndHandle(payload); err != nil {
+				// Preserve upstream behavior: report the application error and continue.
+				// Business retries are not implemented by reconnecting the QQ gateway.
+				log.Errorf("QQ event handler failed: %v", err)
+			}
+			c.saveSeq(payload.Seq)
 		}
 	}
-	log.Infof("%s message queue is closed", c.session)
 }
 
 func (c *Client) saveSeq(seq uint32) {
-	if seq > 0 {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	if !c.closed.Load() && c.session != nil && seq > c.session.LastSeq {
 		c.session.LastSeq = seq
 	}
 }
 
-// isHandleBuildIn 内置的事件处理，处理那些不需要业务方处理的事件
-// return true 的时候说明事件已经被处理了
 func (c *Client) isHandleBuildIn(payload *dto.WSPayload) bool {
 	switch payload.OPCode {
-	case dto.WSHello: // 接收到 hello 后需要开始发心跳
+	case dto.WSHello:
 		c.startHeartBeatTicker(payload.RawMessage)
-	case dto.WSHeartbeatAck: // 心跳 ack 不需要业务处理
-	case dto.WSReconnect: // 达到连接时长，需要重新连接，此时可以通过 resume 续传原连接上的事件
-		c.closeChan <- errs.ErrNeedReConnect
-	case dto.WSInvalidSession: // 无效的 sessionLog，需要重新鉴权
-		c.closeChan <- errs.ErrInvalidSession
+	case dto.WSHeartbeatAck:
+		c.heartbeatPending.Store(false)
+	case dto.WSHeartbeat:
+		c.heartbeatPending.Store(true)
+		_ = c.Write(&dto.WSPayload{WSPayloadBase: dto.WSPayloadBase{OPCode: dto.WSHeartbeat}, Data: c.receivedSeq.Load()})
+	case dto.WSReconnect:
+		c.notify(errs.ErrNeedReConnect)
+	case dto.WSInvalidSession:
+		c.notify(errs.ErrInvalidSession)
 	default:
 		return false
 	}
 	return true
 }
 
-// startHeartBeatTicker 启动定时心跳
-func (c *Client) startHeartBeatTicker(message []byte) {
-	helloData := &dto.WSHelloData{}
-	if err := event.ParseData(message, helloData); err != nil {
-		log.Errorf("%s hello data parse failed, %v, message %v", c.session, err, message)
+func (c *Client) startHeartBeatTicker(raw []byte) {
+	var hello dto.WSHelloData
+	if err := event.ParseData(raw, &hello); err != nil || hello.HeartbeatInterval <= 0 || hello.HeartbeatInterval > 24*60*60*1000 {
+		c.notify(errors.New("invalid QQ heartbeat interval"))
+		return
 	}
-	// 根据 hello 的回包，重新设置心跳的定时器时间
-	c.heartBeatTicker.Reset(time.Duration(helloData.HeartbeatInterval) * time.Millisecond)
+	c.heartBeatTicker.Reset(time.Duration(hello.HeartbeatInterval) * time.Millisecond)
+	if conn := c.connection(); conn != nil {
+		_ = conn.SetReadDeadline(time.Time{})
+	}
 }
 
-// readyHandler 针对ready返回的处理，需要记录 sessionID 等相关信息
-func (c *Client) readyHandler(payload *dto.WSPayload) {
-	readyData := &dto.WSReadyData{}
-	if err := event.ParseData(payload.RawMessage, readyData); err != nil {
-		log.Errorf("%s parseReadyData failed, %v, message %v", c.session, err, payload.RawMessage)
+func (c *Client) readyHandler(payload *dto.WSPayload) error {
+	var ready dto.WSReadyData
+	if err := event.ParseData(payload.RawMessage, &ready); err != nil {
+		return err
 	}
-	c.version = readyData.Version
-	// 基于 ready 事件，更新 session 信息
-	c.session.ID = readyData.SessionID
-	c.session.Shards.ShardID = readyData.Shard[0]
-	c.session.Shards.ShardCount = readyData.Shard[1]
-	c.user = &dto.WSUser{
-		ID:       readyData.User.ID,
-		Username: readyData.User.Username,
-		Bot:      readyData.User.Bot,
+	if ready.SessionID == "" || len(ready.Shard) != 2 || ready.Shard[1] == 0 || ready.Shard[0] >= ready.Shard[1] {
+		return errors.New("invalid QQ READY payload")
 	}
-	// 调用自定义的 ready 回调
+	c.stateMu.Lock()
+	if c.closed.Load() {
+		c.stateMu.Unlock()
+		return context.Canceled
+	}
+	c.version = ready.Version
+	c.session.ID = ready.SessionID
+	c.session.Shards = dto.ShardConfig{ShardID: ready.Shard[0], ShardCount: ready.Shard[1]}
+	c.user = &dto.WSUser{ID: ready.User.ID, Username: ready.User.Username, Bot: ready.User.Bot}
+	c.stateMu.Unlock()
+	payload.Session = c.Session()
 	if event.DefaultHandlers.Ready != nil {
-		event.DefaultHandlers.Ready(payload, readyData)
+		event.DefaultHandlers.Ready(payload, &ready)
 	}
+	return nil
 }

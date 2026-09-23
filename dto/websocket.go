@@ -31,7 +31,7 @@ type ShardConfig struct {
 type Session struct {
 	ID          string
 	URL         string
-	TokenSource oauth2.TokenSource
+	TokenSource oauth2.TokenSource `json:"-"` // Runtime credentials are never serialized with session metadata.
 	Intent      Intent
 	LastSeq     uint32
 	Shards      ShardConfig

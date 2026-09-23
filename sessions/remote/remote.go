@@ -7,14 +7,14 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/go-redis/redis/v8"
-	"github.com/google/uuid"
 	"github.com/WindowsSov8forUs/botgo-plus/dto"
 	"github.com/WindowsSov8forUs/botgo-plus/log"
 	"github.com/WindowsSov8forUs/botgo-plus/sessions/manager"
 	"github.com/WindowsSov8forUs/botgo-plus/sessions/remote/lock"
 	"github.com/WindowsSov8forUs/botgo-plus/token"
 	"github.com/WindowsSov8forUs/botgo-plus/websocket"
+	"github.com/go-redis/redis/v8"
+	"github.com/google/uuid"
 	"golang.org/x/oauth2"
 )
 
@@ -54,6 +54,9 @@ func New(client *redis.Client, opts ...Option) *RedisManager {
 
 // Start 启动 redis 的 session 管理器
 func (r *RedisManager) Start(apInfo *dto.WebsocketAP, tokenSource oauth2.TokenSource, intents *dto.Intent) error {
+	if tokenSource == nil {
+		return fmt.Errorf("QQ token source is required")
+	}
 	defer log.Sync()
 	if err := manager.CheckSessionLimit(apInfo); err != nil {
 		log.Errorf("[ws/session/redis] session limited apInfo: %+v", apInfo)
@@ -87,10 +90,10 @@ func (r *RedisManager) Start(apInfo *dto.WebsocketAP, tokenSource oauth2.TokenSo
 	// 对于没有抢到锁的服务，当ws异常，把session放回到 redis list 中，重新分发
 	go r.sessionProducer(startInterval)
 
-	return r.consume(startInterval)
+	return r.consume(startInterval, tokenSource)
 }
 
-func (r *RedisManager) consume(startInterval time.Duration) error {
+func (r *RedisManager) consume(startInterval time.Duration, source oauth2.TokenSource) error {
 	log.Debug("[ws/session/redis] start consume for session")
 	for {
 		// brpop 返回 key value
@@ -105,7 +108,7 @@ func (r *RedisManager) consume(startInterval time.Duration) error {
 			log.Errorf("[ws/session/redis] data is not valid, data: %+v", data)
 			continue
 		}
-		log.Debugf("[ws/session/redis] consume data: %s", data)
+		log.Debug("[ws/session/redis] dequeued session metadata")
 
 		session := &dto.Session{}
 		if err := json.Unmarshal([]byte(data[1]), session); err != nil {
@@ -114,6 +117,13 @@ func (r *RedisManager) consume(startInterval time.Duration) error {
 			continue
 		}
 
+		if owner, ok := source.(interface{ GetAppID() string }); ok {
+			if appID := owner.GetAppID(); appID != "" && session.AppID != "" && appID != session.AppID {
+				log.Error("[ws/session/redis] session belongs to another application")
+				continue
+			}
+		}
+		session.TokenSource = source
 		go r.newConnect(*session)
 		time.Sleep(startInterval) // 启动一个连接后，等待一下，避免触发服务端的并发控制
 	}

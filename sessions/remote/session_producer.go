@@ -46,8 +46,13 @@ func (r *RedisManager) sessionProducer(startInterval time.Duration) {
 }
 
 func (r *RedisManager) produce(session dto.Session) error {
+	if session.AppID == "" {
+		if owner, ok := session.TokenSource.(interface{ GetAppID() string }); ok {
+			session.AppID = owner.GetAppID()
+		}
+	}
 	data, err := json.Marshal(session)
-	log.Debugf("[ws][session/redis] produce session data is %s", string(data))
+	log.Debug("[ws/session/redis] enqueueing session metadata")
 	if err != nil {
 		return ErrSessionMarshalFailed
 	}
