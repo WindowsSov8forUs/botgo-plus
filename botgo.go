@@ -36,7 +36,13 @@ func NewOpenAPI(appID string, tokenSource oauth2.TokenSource) openapi.OpenAPI {
 	return openapi.DefaultImpl.Setup(appID, tokenSource, false)
 }
 
-// NewSandboxOpenAPI 创建测试环境的 openapi 实例
+// Deprecated: historical sandbox, explicit legacy opt-in; never redirected to production.
+// NewSandboxOpenAPI creates a client targeting the old sandbox.
 func NewSandboxOpenAPI(appID string, tokenSource oauth2.TokenSource) openapi.OpenAPI {
 	return openapi.DefaultImpl.Setup(appID, tokenSource, true)
+}
+
+// NewClient creates an isolated, explicitly configured native QQ client.
+func NewClient(appID string, source oauth2.TokenSource, options ...v1.ClientOption) (*v1.Client, error) {
+	return v1.New(appID, source, options...)
 }

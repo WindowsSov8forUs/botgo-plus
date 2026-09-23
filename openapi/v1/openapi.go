@@ -1,198 +1,298 @@
-// Package v1 是 openapi v1 版本的实现。
+// Package v1 implements the native QQ API. The package name is retained for source compatibility.
 package v1
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"net"
-	"net/http"
-	"time"
-
-	"github.com/go-resty/resty/v2" // resty 是一个优秀的 rest api 客户端，可以极大的减少开发基于 rest 标准接口求请求的封装工作量
 	"github.com/WindowsSov8forUs/botgo-plus/constant"
 	"github.com/WindowsSov8forUs/botgo-plus/errs"
 	"github.com/WindowsSov8forUs/botgo-plus/log"
 	"github.com/WindowsSov8forUs/botgo-plus/openapi"
+	"github.com/WindowsSov8forUs/botgo-plus/token"
 	"github.com/WindowsSov8forUs/botgo-plus/version"
+	"github.com/go-resty/resty/v2"
 	"golang.org/x/oauth2"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"strings"
+	"sync/atomic"
+	"time"
 )
 
-// MaxIdleConns 默认指定空闲连接池大小
-const MaxIdleConns = 3000
+const MaxIdleConns = 128
+const defaultMaxResponseBytes int64 = 16 * 1024 * 1024
+
+type Client = openAPI
+type ClientOption func(*clientConfig)
+type clientConfig struct {
+	baseURL          string
+	timeout          time.Duration
+	transport        http.RoundTripper
+	maxResponseBytes int64
+}
+
+func WithBaseURL(s string) ClientOption { return func(c *clientConfig) { c.baseURL = s } }
+func WithHTTPTransport(t http.RoundTripper) ClientOption {
+	return func(c *clientConfig) { c.transport = t }
+}
+func WithRequestTimeout(t time.Duration) ClientOption { return func(c *clientConfig) { c.timeout = t } }
+func WithMaxResponseBytes(n int64) ClientOption {
+	return func(c *clientConfig) { c.maxResponseBytes = n }
+}
 
 type openAPI struct {
 	appID       string
 	tokenSource oauth2.TokenSource
-	timeout     time.Duration
-
-	sandbox     bool   // 请求沙箱环境
-	debug       bool   // debug 模式，调试sdk时候使用
-	lastTraceID string // lastTraceID id
-
-	restyClient *resty.Client // resty client 复用
+	baseURL     string
+	lastTraceID atomic.Value
+	debug       atomic.Bool
+	restyClient *resty.Client
 }
 
-// Setup 注册
-func Setup() {
-	openapi.Register(openapi.APIv1, &openAPI{})
-}
-
-// Version 创建当前版本
-func (o *openAPI) Version() openapi.APIVersion {
-	return openapi.APIv1
-}
-
-// TraceID 获取 lastTraceID id
-func (o *openAPI) TraceID() string {
-	return o.lastTraceID
-}
-
-// Setup 生成一个实例
-func (o *openAPI) Setup(botAppID string, tokenSource oauth2.TokenSource, inSandbox bool) openapi.OpenAPI {
-	api := &openAPI{
-		appID:       botAppID,
-		tokenSource: tokenSource,
-		timeout:     5 * time.Second,
-		sandbox:     inSandbox,
+func New(appID string, source oauth2.TokenSource, options ...ClientOption) (*Client, error) {
+	if appID == "" || source == nil {
+		return nil, errors.New("QQ app ID and token source are required")
 	}
-	api.setupClient(botAppID) // 初始化可复用的 client
+	if owner, ok := source.(interface{ GetAppID() string }); ok && owner.GetAppID() != "" && owner.GetAppID() != appID {
+		return nil, errors.New("QQ token source belongs to a different application")
+	}
+	cfg := clientConfig{baseURL: constant.APIDomain, timeout: 15 * time.Second, maxResponseBytes: defaultMaxResponseBytes}
+	for _, o := range options {
+		o(&cfg)
+	}
+	u, err := url.Parse(cfg.baseURL)
+	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return nil, errors.New("invalid QQ API base URL")
+	}
+	if cfg.timeout < 0 || cfg.maxResponseBytes <= 0 {
+		return nil, errors.New("timeout must be nonnegative and response limit positive")
+	}
+	if cfg.transport == nil {
+		cfg.transport = createTransport(nil, MaxIdleConns)
+	}
+	api := &openAPI{appID: appID, tokenSource: source, baseURL: strings.TrimRight(u.String(), "/")}
+	transport := &authorizedTransport{base: cfg.transport, source: source, origin: u, appID: appID, maxBytes: cfg.maxResponseBytes}
+	hc := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	api.restyClient = resty.NewWithClient(hc).SetTimeout(cfg.timeout).SetLogger(log.DefaultLogger).SetHeader("User-Agent", version.String()).SetHeader("Content-Type", "application/json")
+	api.restyClient.OnAfterResponse(func(_ *resty.Client, resp *resty.Response) error {
+		trace := resp.Header().Get(constant.HeaderTraceID)
+		api.lastTraceID.Store(trace)
+		if api.debug.Load() {
+			log.Debugf("QQ API %s %s status=%d trace=%s elapsed=%s", resp.Request.Method, resp.Request.RawRequest.URL.Path, resp.StatusCode(), trace, resp.Time())
+		}
+		if err := openapi.DoRespFilterChains(resp.Request.RawRequest, resp.RawResponse); err != nil {
+			return err
+		}
+		if err := errs.CheckAPIResponse(resp.StatusCode(), resp.Header(), resp.Body()); err != nil {
+			return err
+		}
+		if resp.Request.Result != nil && resp.StatusCode() != http.StatusNoContent {
+			body := bytes.TrimSpace(resp.Body())
+			if len(body) == 0 || bytes.Equal(body, []byte("null")) {
+				return io.ErrUnexpectedEOF
+			}
+		}
+		return nil
+	})
+	return api, nil
+}
+func Setup()                                   { openapi.Register(openapi.APIv1, &openAPI{}) }
+func (o *openAPI) Version() openapi.APIVersion { return openapi.APIv1 }
+
+// TraceID is race-safe but only describes the most recently completed request. Prefer ResponseMeta.
+func (o *openAPI) TraceID() string {
+	if s, ok := o.lastTraceID.Load().(string); ok {
+		return s
+	}
+	return ""
+}
+func (o *openAPI) Setup(appID string, source oauth2.TokenSource, inSandbox bool) openapi.OpenAPI {
+	var opts []ClientOption
+	if inSandbox {
+		opts = append(opts, WithBaseURL(constant.SandBoxAPIDomain))
+	}
+	api, err := New(appID, source, opts...)
+	if err != nil {
+		panic(err)
+	}
 	return api
 }
 
-// WithTimeout 设置请求接口超时时间
-func (o *openAPI) WithTimeout(duration time.Duration) openapi.OpenAPI {
-	o.restyClient.SetTimeout(duration)
+// WithTimeout configures the HTTP client before use. Do not change it during requests.
+// Zero disables the client timeout; caller context deadlines still apply.
+func (o *openAPI) WithTimeout(d time.Duration) openapi.OpenAPI {
+	if d < 0 {
+		panic("QQ timeout must be nonnegative")
+	}
+	o.restyClient.SetTimeout(d)
 	return o
 }
 
-// SetDebug 设置调试模式, 输出更多过程日志
-func (o *openAPI) SetDebug(debug bool) openapi.OpenAPI {
-	o.restyClient.Debug = debug
-	return o
-}
-
-// Transport 透传请求
-func (o *openAPI) Transport(ctx context.Context, method, url string, body interface{}) ([]byte, error) {
-	resp, err := o.request(ctx).SetBody(body).Execute(method, url)
-	return resp.Body(), err
-}
-
-// 初始化 client
-func (o *openAPI) setupClient(appID string) {
-	o.restyClient = resty.New().
-		SetTransport(createTransport(nil, MaxIdleConns)). // 自定义 transport
-		SetLogger(log.DefaultLogger).
-		SetDebug(o.debug).
-		SetTimeout(o.timeout).
-		SetHeader("User-Agent", version.String()).
-		SetHeader("X-Union-Appid", appID).
-		SetPreRequestHook(
-			func(_ *resty.Client, request *http.Request) error {
-				// 执行请求前过滤器
-				// 由于在 `OnBeforeRequest` 的时候，request 还没生成，所以 filter 不能使用，所以放到 `PreRequestHook`
-				return openapi.DoReqFilterChains(request, nil)
-			},
-		).
-		OnBeforeRequest(
-			func(c *resty.Client, _ *resty.Request) error {
-				tk, err := o.tokenSource.Token()
-				if err != nil {
-					log.Errorf("[setupClient] retrieve token failed:%s", err)
-					return err
-				}
-				c.SetAuthScheme(tk.TokenType)
-				log.Debugf("token type:%s", tk.TokenType)
-				c.SetAuthToken(tk.AccessToken)
-				return nil
-			},
-		).
-		// 设置请求之后的钩子，打印日志，判断状态码
-		OnAfterResponse(
-			func(_ *resty.Client, resp *resty.Response) error {
-				log.Infof("%v", respInfo(resp))
-				// 执行请求后过滤器
-				if err := openapi.DoRespFilterChains(resp.Request.RawRequest, resp.RawResponse); err != nil {
-					return err
-				}
-				traceID := resp.Header().Get(constant.HeaderTraceID)
-				o.lastTraceID = traceID
-				// 非成功含义的状态码，需要返回 error 供调用方识别
-				if !openapi.IsSuccessStatus(resp.StatusCode()) {
-					o.handleError(resp)
-					return errs.New(resp.StatusCode(), string(resp.Body()), traceID)
-				}
-				return nil
-			},
-		)
-}
-
-// request 每个请求，都需要创建一个 request
-func (o *openAPI) request(ctx context.Context) *resty.Request {
-	return o.restyClient.R().SetContext(ctx)
-}
-
-// GetAppID 获取接口地址，会处理沙箱环境判断
+// SetDebug enables metadata only, never secrets or payload bodies.
+func (o *openAPI) SetDebug(b bool) openapi.OpenAPI { o.debug.Store(b); return o }
 func (o *openAPI) GetAppID() string {
 	if o == nil {
 		return ""
 	}
 	return o.appID
 }
-
-// errBody 请求出错情况下的body结构
-type errBody struct {
-	Message string `json:"message"`  // 错误原因
-	Code    int    `json:"code"`     // 错误码，后续废弃
-	ErrCode int    `json:"err_code"` // 错误码
-	TraceID string `json:"trace_id"` // 服务端traceID, 用于问题排查
+func (o *openAPI) request(ctx context.Context) *resty.Request {
+	return o.restyClient.R().SetContext(ctx)
 }
-
-// handleError 处理openapi调用失败的情况
-func (o *openAPI) handleError(resp *resty.Response) {
-	var b errBody
-	err := json.Unmarshal(resp.Body(), &b)
+func (o *openAPI) endpoint(path string) (string, error) {
+	u, err := url.Parse(path)
 	if err != nil {
-		log.Errorf("parse errBody fail, err:%v, body:%s", err, string(resp.Body()))
-		return
+		return "", err
 	}
-	if b.ErrCode == errs.APICodeTokenExpireOrNotExist || b.Code == errs.APICodeTokenExpireOrNotExist {
-		log.Errorf("token expire or not exist, update token")
-		_, _ = o.tokenSource.Token()
+	if u.IsAbs() {
+		return u.String(), nil
 	}
+	if u.Host != "" || u.Fragment != "" {
+		return "", errors.New("invalid QQ API path")
+	}
+	return o.baseURL + "/" + strings.TrimLeft(path, "/"), nil
+}
+func (o *openAPI) Transport(ctx context.Context, method, path string, body interface{}) ([]byte, error) {
+	endpoint, err := o.endpoint(path)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := o.request(ctx).SetBody(body).Execute(strings.ToUpper(method), endpoint)
+	if resp == nil {
+		return nil, err
+	}
+	return append([]byte(nil), resp.Body()...), err
 }
 
-// respInfo 用于输出日志的时候格式化数据
-func respInfo(resp *resty.Response) string {
-	bodyJSON, _ := json.Marshal(resp.Request.Body)
-	return fmt.Sprintf(
-		"[OPENAPI]%v %v, traceID:%v, status:%v, elapsed:%v req: %v, resp: %v",
-		resp.Request.Method,
-		resp.Request.URL,
-		resp.Header().Get(constant.HeaderTraceID),
-		resp.Status(),
-		resp.Time(),
-		string(bodyJSON),
-		string(resp.Body()),
-	)
+// ResponseMeta belongs to one request and preserves raw, including currently unknown, fields.
+type ResponseMeta struct {
+	StatusCode int
+	TraceID    string
+	Header     http.Header
+	Raw        json.RawMessage
 }
-func createTransport(localAddr net.Addr, idleConns int) *http.Transport {
-	dialer := &net.Dialer{
-		Timeout:   60 * time.Second,
-		KeepAlive: 60 * time.Second,
+
+func (o *openAPI) Do(ctx context.Context, method, path string, body, out interface{}) (*ResponseMeta, error) {
+	endpoint, err := o.endpoint(path)
+	if err != nil {
+		return nil, err
 	}
-	if localAddr != nil {
-		dialer.LocalAddr = localAddr
+	resp, err := o.request(ctx).SetBody(body).Execute(strings.ToUpper(method), endpoint)
+	if resp == nil {
+		return nil, err
 	}
-	return &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           dialer.DialContext,
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          idleConns,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		MaxIdleConnsPerHost:   idleConns,
-		MaxConnsPerHost:       idleConns,
+	meta := &ResponseMeta{StatusCode: resp.StatusCode(), TraceID: resp.Header().Get(constant.HeaderTraceID), Header: resp.Header().Clone(), Raw: append([]byte(nil), resp.Body()...)}
+	if meta.TraceID == "" {
+		var trace struct {
+			TraceID string `json:"trace_id"`
+		}
+		if json.Unmarshal(meta.Raw, &trace) == nil {
+			meta.TraceID = trace.TraceID
+		}
 	}
+	if err != nil {
+		return meta, err
+	}
+	if out != nil {
+		body := bytes.TrimSpace(meta.Raw)
+		if len(body) == 0 || bytes.Equal(body, []byte("null")) {
+			err = io.ErrUnexpectedEOF
+		} else if decodeErr := json.Unmarshal(body, out); decodeErr != nil {
+			err = fmt.Errorf("decode QQ API response: %w", decodeErr)
+		}
+		if err != nil {
+			return meta, err
+		}
+	}
+	return meta, nil
+}
+
+type authorizedTransport struct {
+	base     http.RoundTripper
+	source   oauth2.TokenSource
+	origin   *url.URL
+	appID    string
+	maxBytes int64
+}
+
+func (t *authorizedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Body != nil {
+		defer req.Body.Close()
+	}
+	if req.URL.Scheme != t.origin.Scheme || !strings.EqualFold(req.URL.Host, t.origin.Host) || req.URL.User != nil {
+		return nil, errors.New("QQ credentials cannot be sent outside the configured API origin")
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		tk, err := token.TokenContext(req.Context(), t.source)
+		if err != nil {
+			return nil, err
+		}
+		if tk == nil || tk.AccessToken == "" {
+			return nil, errors.New("empty QQ access token")
+		}
+		clone := req.Clone(req.Context())
+		if attempt > 0 && req.Body != nil {
+			clone.Body, err = req.GetBody()
+			if err != nil {
+				return nil, err
+			}
+		}
+		scheme := tk.TokenType
+		if scheme == "" {
+			scheme = token.TypeQQBot
+		}
+		clone.Header.Set("Authorization", scheme+" "+tk.AccessToken)
+		clone.Header.Set("X-Union-Appid", t.appID)
+		if err := openapi.DoReqFilterChains(clone, nil); err != nil {
+			if clone.Body != nil {
+				clone.Body.Close()
+			}
+			return nil, err
+		}
+		if clone.URL.Scheme != t.origin.Scheme || !strings.EqualFold(clone.URL.Host, t.origin.Host) || clone.URL.User != nil {
+			if clone.Body != nil {
+				clone.Body.Close()
+			}
+			return nil, errors.New("QQ request middleware changed the credential origin")
+		}
+		if err := clone.Context().Err(); err != nil {
+			if clone.Body != nil {
+				clone.Body.Close()
+			}
+			return nil, err
+		}
+		resp, err := t.base.RoundTrip(clone)
+		if err != nil {
+			return nil, err
+		}
+		data, readErr := io.ReadAll(io.LimitReader(resp.Body, t.maxBytes+1))
+		resp.Body.Close()
+		if readErr == nil && int64(len(data)) > t.maxBytes {
+			readErr = errors.New("QQ response exceeds configured size limit")
+		}
+		if readErr != nil {
+			return nil, readErr
+		}
+		resp.Body = io.NopCloser(bytes.NewReader(data))
+		var apiErr *errs.APIError
+		classified := errs.CheckAPIResponse(resp.StatusCode, resp.Header, data)
+		rejected := errors.As(classified, &apiErr) && (apiErr.StatusCode == 401 || apiErr.ErrorCode == errs.APICodeTokenExpireOrNotExist)
+		invalidator, canInvalidate := t.source.(interface{ Invalidate(string) bool })
+		if attempt == 0 && rejected && canInvalidate && (req.Body == nil || req.GetBody != nil) {
+			resp.Body.Close()
+			invalidator.Invalidate(tk.AccessToken)
+			continue
+		}
+		return resp, nil
+	}
+	return nil, errors.New("QQ authentication retry exhausted")
+}
+func createTransport(localAddr net.Addr, idle int) *http.Transport {
+	d := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second, LocalAddr: localAddr}
+	return &http.Transport{Proxy: http.ProxyFromEnvironment, DialContext: d.DialContext, ForceAttemptHTTP2: true, MaxIdleConns: idle, MaxIdleConnsPerHost: idle, IdleConnTimeout: 90 * time.Second, TLSHandshakeTimeout: 10 * time.Second, ExpectContinueTimeout: time.Second}
 }
