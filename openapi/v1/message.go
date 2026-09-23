@@ -1,8 +1,10 @@
 package v1
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -67,6 +69,47 @@ func (o *openAPI) PostMessage(ctx context.Context, channelID string, msg *dto.Me
 		SetPathParam("channel_id", channelID).
 		SetBody(msg)
 
+	resp, err := baseRequest(ctx, reqCMD, http.MethodPost, o.getURL(messagesURI), opt...)
+	if err != nil {
+		return nil, err
+	}
+	return resp.Result().(*dto.Message), nil
+}
+
+// PostMessageMultipart sends a local image to a guild channel as file_image.
+// Message fields use their existing JSON names; objects are encoded as JSON form values.
+// The image and request are buffered in memory. Use NewClient to access this method.
+func (o *openAPI) PostMessageMultipart(ctx context.Context, channelID string, msg *dto.MessageToCreate,
+	fileImageData []byte, opt ...options.Option) (*dto.Message, error) {
+	if _, err := nativeID(channelID); err != nil {
+		return nil, err
+	}
+	if msg == nil || len(fileImageData) == 0 {
+		return nil, errors.New("message and image data are required")
+	}
+	encoded, err := json.Marshal(msg)
+	if err != nil {
+		return nil, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		return nil, err
+	}
+	form := make(map[string]string, len(fields))
+	for name, value := range fields {
+		text := string(value)
+		if len(value) > 0 && value[0] == '"' {
+			if err := json.Unmarshal(value, &text); err != nil {
+				return nil, err
+			}
+		}
+		form[name] = text
+	}
+	reqCMD := o.request(ctx).
+		SetResult(dto.Message{}).
+		SetPathParam("channel_id", channelID).
+		SetFormData(form).
+		SetFileReader("file_image", "image", bytes.NewReader(fileImageData))
 	resp, err := baseRequest(ctx, reqCMD, http.MethodPost, o.getURL(messagesURI), opt...)
 	if err != nil {
 		return nil, err
