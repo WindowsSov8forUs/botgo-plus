@@ -4,7 +4,7 @@ import (
 	"context"
 	"log"
 
-	"github.com/tencent-connect/botgo/dto"
+	"github.com/WindowsSov8forUs/botgo-plus/dto"
 )
 
 func (p Processor) setEmoji(ctx context.Context, channelID string, messageID string) {

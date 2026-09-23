@@ -9,17 +9,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/WindowsSov8forUs/botgo-plus"
+	"github.com/WindowsSov8forUs/botgo-plus/dto"
+	"github.com/WindowsSov8forUs/botgo-plus/dto/message"
+	"github.com/WindowsSov8forUs/botgo-plus/event"
+	"github.com/WindowsSov8forUs/botgo-plus/interaction/webhook"
 	"github.com/google/uuid"
-	"github.com/tencent-connect/botgo"
-	"github.com/tencent-connect/botgo/dto"
-	"github.com/tencent-connect/botgo/dto/message"
-	"github.com/tencent-connect/botgo/event"
-	"github.com/tencent-connect/botgo/interaction/webhook"
 	"gopkg.in/yaml.v3"
 
-	"github.com/tencent-connect/botgo/constant"
-	"github.com/tencent-connect/botgo/openapi"
-	"github.com/tencent-connect/botgo/token"
+	"github.com/WindowsSov8forUs/botgo-plus/constant"
+	"github.com/WindowsSov8forUs/botgo-plus/openapi"
+	"github.com/WindowsSov8forUs/botgo-plus/token"
 )
 
 const (

@@ -9,12 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tencent-connect/botgo"
-	"github.com/tencent-connect/botgo/dto"
-	"github.com/tencent-connect/botgo/dto/message"
-	"github.com/tencent-connect/botgo/event"
-	"github.com/tencent-connect/botgo/interaction/webhook"
-	"github.com/tencent-connect/botgo/token"
+	"github.com/WindowsSov8forUs/botgo-plus"
+	"github.com/WindowsSov8forUs/botgo-plus/dto"
+	"github.com/WindowsSov8forUs/botgo-plus/dto/message"
+	"github.com/WindowsSov8forUs/botgo-plus/event"
+	"github.com/WindowsSov8forUs/botgo-plus/interaction/webhook"
+	"github.com/WindowsSov8forUs/botgo-plus/token"
 	"gopkg.in/yaml.v3"
 )
 

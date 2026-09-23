@@ -11,9 +11,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/tencent-connect/botgo/dto"
-	"github.com/tencent-connect/botgo/interaction/signature"
-	"github.com/tencent-connect/botgo/token"
+	"github.com/WindowsSov8forUs/botgo-plus/dto"
+	"github.com/WindowsSov8forUs/botgo-plus/interaction/signature"
+	"github.com/WindowsSov8forUs/botgo-plus/token"
 	"gopkg.in/yaml.v3"
 )
 
