@@ -1,6 +1,7 @@
 package dto
 
 import (
+	"context"
 	"fmt"
 
 	"golang.org/x/oauth2"
@@ -37,6 +38,12 @@ type Session struct {
 	Shards      ShardConfig
 
 	AppID string
+
+	// EventHandler receives this connection's dispatch events, including READY and
+	// RESUMED, after internal session handling. Set it before creating the client;
+	// nil uses the global handlers. Dispatcher.Handle can be assigned directly.
+	// Like TokenSource, the handler is runtime state and must be rebound after loading JSON.
+	EventHandler func(context.Context, *WSPayload) error `json:"-"`
 }
 
 // String 输出session字符串

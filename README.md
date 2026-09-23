@@ -16,7 +16,7 @@ QQ 官方机器人平台的 Go 原生通信 SDK，基于 `tencent-connect/botgo`
 | 消息发送 | 原生 Markdown / Ark / Keyboard、C2C 专用流式接口、独立互动响应；回复凭据与序号由调用方填写 |
 | 媒体 | URL 上传、预上传、受限并发的分片 PUT、确认、合并；Uploader 不自动发送，低层请求仅在显式设置 srv_send_msg=true 时请求发送 |
 | QQ 群 | 资料、成员详情和分页、批量移除、成员禁言；与 QQ 频道接口分开 |
-| WebSocket | 每分片会话、串行写、ACK 超时检测、快照状态和受控重连 |
+| WebSocket | 每分片会话、连接级原始事件回调、串行写、ACK 超时检测、快照状态和受控重连 |
 
 存在 SDK 方法不代表账号已获平台授权。真实 QQ 权限、频控、媒体限制和特定接入方式需要使用自己的测试机器人验证。历史频道功能与 Redis 多机管理器保留，但未在本轮逐项做生产联调。
 
@@ -70,6 +70,15 @@ go -C examples run ./native-webhook
 ```
 
 示例只记录事件元数据，不自动发消息或修改群。生产使用时，业务处理完成或持久队列确认接收后才返回成功；应用应自行实现幂等、重复投递处理与审核结果关联。不要把打印日志当作可靠队列。
+
+WebSocket 可在创建连接前设置 `dto.Session.EventHandler`，类型为 `func(context.Context, *dto.WSPayload) error`。可以直接传入事件接收函数，也可以绑定已有 `event.Dispatcher`：
+
+```go
+session.EventHandler = dispatcher.Handle
+ws := websocket.ClientImpl.New(session)
+```
+
+回调按该连接的事件顺序接收原始载荷，包括 READY、RESUMED 和业务事件；READY 已先更新 SDK 内部会话，回调可从 `payload.Session` 读取 AppID、会话 ID 和分片信息，从 `payload.RawMessage` 读取完整原始 JSON。配置回调后，该连接的事件交给此回调；未配置时继续使用全局处理器。心跳、鉴权与重连信令仍由 SDK 处理。回调属于运行期配置，保存并加载会话 JSON 后需要重新绑定。
 
 WebSocket 回调返回错误时记录错误并继续分发，不用网关重连代替业务重试；恢复序号在回调处理后推进。队列采用上游容量的有界背压，应用不能将它当作持久队列，长期阻塞仍可能影响连接。
 

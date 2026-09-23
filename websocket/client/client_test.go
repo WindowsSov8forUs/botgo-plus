@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -99,19 +100,57 @@ func TestGatewayFrames(t *testing.T) {
 func TestGatewayDispatch(t *testing.T) {
 	previous := event.DefaultHandlers
 	defer func() { event.DefaultHandlers = previous }()
-	event.DefaultHandlers.Ready = nil
-	received := ""
-	event.DefaultHandlers.Plain = func(p *dto.WSPayload, _ []byte) error {
-		received = p.Session.ID + "/" + string(p.Type)
-		return nil
+	frames := []string{
+		`{"op":0,"s":1,"t":"READY","d":{"session_id":"fresh","shard":[0,1],"user":{"id":"bot"}}}`,
+		`{"op":0,"s":2,"t":"RESUMED","d":""}`,
+		`{"op":0,"s":3,"t":"FUTURE_EVENT","id":"event-id","d":{"extra":"value"}}`,
 	}
-	client := (&Client{}).New(dto.Session{Shards: dto.ShardConfig{ShardCount: 1}}).(*Client)
-	defer client.Close()
-	client.messageQueue <- &dto.WSPayload{WSPayloadBase: dto.WSPayloadBase{OPCode: dto.WSDispatchEvent, Type: "READY", Seq: 1}, RawMessage: []byte(`{"d":{"session_id":"fresh","shard":[0,1],"user":{"id":"bot"}}}`)}
-	client.messageQueue <- &dto.WSPayload{WSPayloadBase: dto.WSPayloadBase{OPCode: dto.WSDispatchEvent, Type: "FUTURE_EVENT", Seq: 2}, RawMessage: []byte(`{"d":{}}`)}
-	close(client.messageQueue)
-	client.listenMessageAndHandle()
-	if received != "fresh/FUTURE_EVENT" || client.Session().ID != "fresh" || client.Session().LastSeq != 2 {
-		t.Fatalf("event=%s session=%+v", received, client.Session())
+	for _, mode := range []string{"global", "callback", "dispatcher"} {
+		t.Run(mode, func(t *testing.T) {
+			received := 0
+			record := func(route string, p *dto.WSPayload) {
+				if route != mode || p.Session.AppID != mode || p.Session.ID != "fresh" {
+					t.Errorf("route=%s session=%+v", route, p.Session)
+				}
+				if received >= len(frames) || string(p.RawMessage) != frames[received] {
+					t.Errorf("event %d: %s", received, p.RawMessage)
+				}
+				received++
+			}
+			event.DefaultHandlers.Ready = func(p *dto.WSPayload, _ *dto.WSReadyData) { record("global", p) }
+			event.DefaultHandlers.Plain = func(p *dto.WSPayload, _ []byte) error {
+				record("global", p)
+				return nil
+			}
+			session := dto.Session{AppID: mode, Shards: dto.ShardConfig{ShardCount: 1}}
+			accept := func(ctx context.Context, p *dto.WSPayload) error {
+				if err := ctx.Err(); err != nil {
+					t.Error(err)
+				}
+				record(mode, p)
+				return nil
+			}
+			switch mode {
+			case "callback":
+				session.EventHandler = accept
+			case "dispatcher":
+				session.EventHandler = event.NewDispatcher(accept).Handle
+			}
+			client := (&Client{}).New(session).(*Client)
+			defer client.Close()
+			for _, raw := range frames {
+				var payload dto.WSPayload
+				if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+					t.Fatal(err)
+				}
+				payload.RawMessage = []byte(raw)
+				client.messageQueue <- &payload
+			}
+			close(client.messageQueue)
+			client.listenMessageAndHandle()
+			if received != len(frames) || client.Session().ID != "fresh" || client.Session().LastSeq != 3 {
+				t.Fatalf("events=%d session=%+v", received, client.Session())
+			}
+		})
 	}
 }
