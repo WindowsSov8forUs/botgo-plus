@@ -1,148 +1,180 @@
-// Package webhook HTTP回调处理
+// Package webhook receives and verifies native QQ callbacks.
 package webhook
 
 import (
+	"context"
 	"encoding/json"
-	"io"
-	"net/http"
-	"os"
-
-	"github.com/WindowsSov8forUs/botgo-plus/constant"
+	"errors"
 	"github.com/WindowsSov8forUs/botgo-plus/dto"
 	"github.com/WindowsSov8forUs/botgo-plus/event"
 	"github.com/WindowsSov8forUs/botgo-plus/interaction/signature"
-	"github.com/WindowsSov8forUs/botgo-plus/log"
 	"github.com/WindowsSov8forUs/botgo-plus/token"
+	"io"
+	"net/http"
+	"os"
 )
+
+const DefaultMaxBodyBytes int64 = 4 * 1024 * 1024
 
 type ack struct {
 	Op   dto.OPCode `json:"op"`
 	Data uint32     `json:"d"`
 }
 
-// GenHeartbeatACK 生成 http gateway 的心跳回包
 func GenHeartbeatACK(seq uint32) string {
-	s, _ := json.Marshal(ack{Op: dto.WSHeartbeatAck, Data: seq})
-	return string(s)
+	b, _ := json.Marshal(ack{Op: dto.WSHeartbeatAck, Data: seq})
+	return string(b)
 }
-
-// GenDispatchACK 生成事件包的回包，如果处理失败，则返回的 d 为 1，服务端会尝试重试
 func GenDispatchACK(success bool) string {
-	var r uint32
+	var d uint32
 	if !success {
-		r = 1
+		d = 1
 	}
-	s, _ := json.Marshal(ack{Op: dto.HTTPCallbackAck, Data: r})
-	return string(s)
+	b, _ := json.Marshal(ack{Op: dto.HTTPCallbackAck, Data: d})
+	return string(b)
 }
 
-// Deprecated: DefaultGetSecretFunc 默认的获取 secret 的函数，默认从环境变量读取
-// 开发者如果需要从自己的配置文件，或者是其他地方获取 secret，可以重写这个函数
-var DefaultGetSecretFunc = func() string {
-	return os.Getenv("QQBotSecret")
+// Deprecated: pass explicit credentials to NewHandler.
+var DefaultGetSecretFunc = func() string { return os.Getenv("QQBotSecret") }
+
+type EventHandler func(context.Context, *dto.WSPayload) error
+type Option func(*Handler)
+
+// WithEventHandler processes or durably enqueues an event before acknowledging acceptance.
+func WithEventHandler(f EventHandler) Option { return func(h *Handler) { h.accept = f } }
+func WithMaxBodyBytes(n int64) Option        { return func(h *Handler) { h.maxBytes = n } }
+
+type Handler struct {
+	credentials token.QQBotCredentials
+	accept      EventHandler
+	maxBytes    int64
 }
 
-// HTTPHandler 用户处理回调时间，该函数实现的是 https://pkg.go.dev/net/http#HandleFunc 所要求的 handler
-// 会自动进行签名验证，心跳包回复，以及根据使用 event.RegisterHandlers 注册的 handler 去执行不同的 handler 来处理事件
-// 如果开发者不想在接收事件的地方处理，可以实现 DefaultHandlers.Plain 然后在内部处理相关的异步生产或者转发的逻辑
-func HTTPHandler(w http.ResponseWriter, r *http.Request, credentials *token.QQBotCredentials) {
+func NewHandler(credentials *token.QQBotCredentials, options ...Option) (*Handler, error) {
+	if credentials == nil || credentials.AppID == "" || credentials.AppSecret == "" {
+		return nil, errors.New("QQ webhook credentials are required")
+	}
+	h := &Handler{credentials: *credentials, maxBytes: DefaultMaxBodyBytes, accept: func(_ context.Context, p *dto.WSPayload) error { return event.ParseAndHandle(p) }}
+	for _, o := range options {
+		o(h)
+	}
+	if h.maxBytes <= 0 || h.accept == nil {
+		return nil, errors.New("invalid QQ webhook options")
+	}
+	return h, nil
+}
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	if r.Header.Get("X-Bot-Appid") != h.credentials.AppID {
+		http.Error(w, "unknown QQ application", 401)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, h.maxBytes)
 	defer r.Body.Close()
-	body := make([]byte, r.ContentLength)
-	if _, err := r.Body.Read(body); err != nil && err != io.EOF {
-		log.Errorf("read http callback body error: %s", err)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			http.Error(w, "payload too large", 413)
+		} else {
+			http.Error(w, "invalid body", 400)
+		}
 		return
 	}
-	log.Debugf("http callback body: %s,len:%d", string(body), len(body))
-	log.Debugf("http callback header: %v", r.Header)
-	traceID := r.Header.Get(constant.HeaderTraceID)
-	// 签名验证
-	if pass, err := signature.Verify(credentials.AppSecret, r.Header, body); err != nil || !pass {
-		log.Errorf("signature verify failed, err: %v, traceID: %s", err, traceID)
+	var envelope struct {
+		Op   *dto.OPCode     `json:"op"`
+		Data json.RawMessage `json:"d"`
+	}
+	if json.Unmarshal(body, &envelope) != nil || envelope.Op == nil {
+		http.Error(w, "invalid payload", 400)
 		return
 	}
-	// 解析 payload
-	payload := &dto.WSPayload{}
-	if err := json.Unmarshal(body, payload); err != nil {
-		log.Errorf("unmarshal http callback body error: %s, traceID: %s", err, traceID)
-		return
-	}
-	log.Info("payload:%+v", payload)
-	// 原始数据放入，parse 的时候需要从里面提取 d
-	payload.RawMessage = body
-	payload.Session = &dto.Session{AppID: credentials.AppID}
-	var result string
-	if payload.OPCode == dto.HTTPCallbackValidation {
-		data, ok := payload.Data.(map[string]interface{})
-		if !ok {
-			log.Errorf("callback data invalid: %+v, traceID: %s", payload.Data, traceID)
+	// A challenge is never dispatched as an unsigned business event.
+	if *envelope.Op == dto.HTTPCallbackValidation {
+		var challenge dto.WHValidationReq
+		if json.Unmarshal(envelope.Data, &challenge) != nil || challenge.PlainToken == "" || challenge.EventTs == "" {
+			http.Error(w, "invalid challenge", 400)
 			return
 		}
-		plainToken, ptOk := data["plain_token"].(string)
-		eventTs, etOk := data["event_ts"].(string)
-		if !ptOk || !etOk {
-			log.Errorf("callback data invalid: %+v, traceID: %s", payload.Data, traceID)
-		}
-		req := &dto.WHValidationReq{
-			PlainToken: plainToken,
-			EventTs:    eventTs,
-		}
-		validationRsp := GenValidationACK(req, r.Header, credentials.AppSecret)
-		if validationRsp != nil {
-			if _, err := w.Write(validationRsp); err != nil {
-				log.Errorf("write http callback response error: %s, traceID: %s", err, traceID)
-				return
-			}
-		}
-		return
-	}
-
-	result = parsePayload(payload, traceID)
-	if result != "" {
-		if _, err := w.Write([]byte(result)); err != nil {
-			log.Errorf("write http callback response error: %s, traceID: %s", err, traceID)
+		result := GenValidationACK(&challenge, r.Header, h.credentials.AppSecret)
+		if result == nil {
+			http.Error(w, "cannot sign challenge", 500)
 			return
 		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(result)
+		return
 	}
-}
-
-func parsePayload(payload *dto.WSPayload, traceID string) string {
-	// 处理心跳包
-	if payload.OPCode == dto.WSHeartbeat {
-		return GenHeartbeatACK(uint32(payload.Data.(float64)))
+	valid, err := signature.Verify(h.credentials.AppSecret, r.Header, body)
+	if err != nil || !valid {
+		http.Error(w, "invalid signature", 401)
+		return
 	}
-	// 处理事件
-	if payload.OPCode == dto.WSDispatchEvent {
-		// 解析具体事件，并投递给业务注册的 handler
-		if err := event.ParseAndHandle(payload); err != nil {
-			log.Errorf(
-				"parseAndHandle failed, %v, traceID:%s, payload: %v", err,
-				traceID, payload,
-			)
-			return GenDispatchACK(false)
+	if *envelope.Op == dto.WSHeartbeat {
+		var seq uint32
+		if json.Unmarshal(envelope.Data, &seq) != nil {
+			http.Error(w, "invalid heartbeat", 400)
+			return
 		}
-		return GenDispatchACK(true)
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, GenHeartbeatACK(seq))
+		return
 	}
-
-	return ""
+	if *envelope.Op != dto.WSDispatchEvent {
+		http.Error(w, "unsupported opcode", 400)
+		return
+	}
+	var payload dto.WSPayload
+	if json.Unmarshal(body, &payload) != nil || payload.Type == "" {
+		http.Error(w, "invalid event", 400)
+		return
+	}
+	payload.RawMessage = append([]byte(nil), body...)
+	payload.Session = &dto.Session{AppID: h.credentials.AppID}
+	err = acceptSafely(r.Context(), h.accept, &payload)
+	w.Header().Set("Content-Type", "application/json")
+	if err != nil {
+		w.WriteHeader(503)
+		io.WriteString(w, GenDispatchACK(false))
+		return
+	}
+	io.WriteString(w, GenDispatchACK(true))
+}
+func acceptSafely(ctx context.Context, f EventHandler, p *dto.WSPayload) (err error) {
+	defer func() {
+		if recover() != nil {
+			err = errors.New("QQ event handler panicked")
+		}
+	}()
+	return f(ctx, p)
 }
 
-// GenValidationACK 生成回调校验回包
+// HTTPHandler is the legacy wrapper; prefer constructing one Handler per application.
+func HTTPHandler(w http.ResponseWriter, r *http.Request, credentials *token.QQBotCredentials) {
+	h, err := NewHandler(credentials)
+	if err != nil {
+		http.Error(w, "invalid webhook configuration", 500)
+		return
+	}
+	h.ServeHTTP(w, r)
+}
 func GenValidationACK(req *dto.WHValidationReq, header http.Header, secret string) []byte {
+	if req == nil || req.PlainToken == "" || req.EventTs == "" {
+		return nil
+	}
 	h := header.Clone()
 	h.Set(signature.HeaderTimestamp, req.EventTs)
 	sig, err := signature.Generate(secret, h, []byte(req.PlainToken))
 	if err != nil {
-		log.Errorf("generate signature failed:%+v", err)
 		return nil
 	}
-	rsp, err := json.Marshal(
-		&dto.WHValidationRsp{
-			PlainToken: req.PlainToken,
-			Signature:  sig,
-		})
+	b, err := json.Marshal(dto.WHValidationRsp{PlainToken: req.PlainToken, Signature: sig})
 	if err != nil {
-		log.Errorf("handle validation failed:", err)
 		return nil
 	}
-	return rsp
+	return b
 }
