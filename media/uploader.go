@@ -6,6 +6,7 @@ import (
 	"crypto/md5"
 	"crypto/sha1"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/WindowsSov8forUs/botgo-plus/dto"
+	"github.com/WindowsSov8forUs/botgo-plus/log"
 	v1 "github.com/WindowsSov8forUs/botgo-plus/openapi/v1"
 )
 
@@ -89,16 +91,56 @@ func NewUploader(api *v1.Client, config Config) (*Uploader, error) {
 // UploadError preserves the stage and upload ID for diagnosis. Error avoids printing signed URLs.
 // A failed upload may have confirmed some parts; no automatic restart or resend is performed.
 type UploadError struct {
-	Stage     string
-	UploadID  string
-	PartIndex int
-	Cause     error
+	Stage       string
+	UploadID    string
+	PartIndex   int
+	Cause       error
+	Meta        *v1.ResponseMeta // The failed phase response, kept in memory and never dumped by Error.
+	PlanSummary string
 }
 
 func (e *UploadError) Error() string {
-	return fmt.Sprintf("QQ media upload failed at %s (part %d)", e.Stage, e.PartIndex)
+	if e == nil {
+		return ""
+	}
+	text := "QQ media upload failed at " + e.Stage
+	if e.PartIndex >= 0 {
+		text += fmt.Sprintf(" (part %d)", e.PartIndex)
+	}
+	if e.PlanSummary != "" {
+		text += ": " + e.PlanSummary
+	}
+	if e.Cause != nil {
+		text += ": " + log.SafeError(e.Cause)
+	}
+	return text
 }
-func (e *UploadError) Unwrap() error { return e.Cause }
+func (e *UploadError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+func (e *UploadError) ResponseHeaders() http.Header {
+	if e == nil {
+		return nil
+	}
+	if e.Meta != nil {
+		h := e.Meta.Header.Clone()
+		if h == nil {
+			h = make(http.Header)
+		}
+		if e.Meta.TraceID != "" {
+			h.Set("X-Tps-trace-ID", e.Meta.TraceID)
+		}
+		return h
+	}
+	var response interface{ ResponseHeaders() http.Header }
+	if errors.As(e.Cause, &response) {
+		return response.ResponseHeaders()
+	}
+	return nil
+}
 
 type checkedReader struct {
 	ctx    context.Context
@@ -149,23 +191,38 @@ type chunk struct {
 }
 
 func uploadLayout(plan *dto.UploadPrepareResult, size int64) ([]chunk, error) {
-	if plan == nil || plan.UploadID == "" || len(plan.Parts) == 0 || len(plan.Parts) > 65536 {
-		return nil, errors.New("invalid or unsupported upload plan")
+	if plan == nil {
+		return nil, errors.New("no upload plan was returned")
+	}
+	if plan.UploadID == "" {
+		return nil, errors.New("upload plan has no upload_id")
+	}
+	if len(plan.Parts) == 0 {
+		return nil, errors.New("upload plan has no parts")
+	}
+	if len(plan.Parts) > 65536 {
+		return nil, fmt.Errorf("upload plan contains too many parts: %d", len(plan.Parts))
 	}
 	parts := append([]dto.UploadPart(nil), plan.Parts...)
 	sort.Slice(parts, func(i, j int) bool { return parts[i].Index < parts[j].Index })
 	result := make([]chunk, 0, len(parts))
 	var offset int64
 	for index, part := range parts {
-		if part.Index != index || part.PresignedURL == "" || offset >= size {
-			return nil, errors.New("non-contiguous upload parts")
+		if part.Index != index {
+			return nil, fmt.Errorf("non-contiguous upload parts: expected index %d, received %d", index, part.Index)
+		}
+		if part.PresignedURL == "" {
+			return nil, fmt.Errorf("upload part %d has no signed URL", part.Index)
+		}
+		if offset >= size {
+			return nil, fmt.Errorf("upload part %d exceeds source size %d", part.Index, size)
 		}
 		length := int64(part.BlockSize)
 		if length == 0 {
 			length = int64(plan.BlockSize)
 		}
 		if length <= 0 {
-			return nil, errors.New("invalid upload block size")
+			return nil, fmt.Errorf("invalid upload block size %d for part %d", length, part.Index)
 		}
 		if remaining := size - offset; length > remaining {
 			length = remaining
@@ -174,7 +231,7 @@ func uploadLayout(plan *dto.UploadPrepareResult, size int64) ([]chunk, error) {
 		offset += length
 	}
 	if offset != size {
-		return nil, errors.New("upload plan does not cover the entire source")
+		return nil, fmt.Errorf("upload plan covers %d of %d source bytes", offset, size)
 	}
 	return result, nil
 }
@@ -197,21 +254,26 @@ func (u *Uploader) Upload(ctx context.Context, target Target, source io.ReaderAt
 	}
 	request := &dto.UploadPrepareRequest{FileType: fileType, FileSize: dto.DecimalInt64(size), FileName: fileName, MD5: md, SHA1: sh, MD5Prefix: prefix}
 	var plan *dto.UploadPrepareResult
+	var meta *v1.ResponseMeta
 	if target.Scope == GroupScope {
-		plan, _, err = u.api.PrepareGroupUpload(ctx, target.OpenID, request)
+		plan, meta, err = u.api.PrepareGroupUpload(ctx, target.OpenID, request)
 	} else {
-		plan, _, err = u.api.PrepareC2CUpload(ctx, target.OpenID, request)
+		plan, meta, err = u.api.PrepareC2CUpload(ctx, target.OpenID, request)
 	}
 	if err != nil {
-		return nil, &UploadError{Stage: "prepare", PartIndex: -1, Cause: err}
+		return nil, &UploadError{Stage: "prepare", PartIndex: -1, Cause: err, Meta: meta}
+	}
+	uploadID := ""
+	if plan != nil {
+		uploadID = plan.UploadID
 	}
 	chunks, err := uploadLayout(plan, size)
 	if err != nil {
-		return nil, &UploadError{Stage: "layout", UploadID: plan.UploadID, PartIndex: -1, Cause: err}
+		return nil, &UploadError{Stage: "layout", UploadID: uploadID, PartIndex: -1, Cause: meta.WrapError("validate QQ upload plan", err), Meta: meta, PlanSummary: describeUploadPlan(plan, meta)}
 	}
 	for _, item := range chunks {
 		if err := u.validatePUTURL(item.part.PresignedURL); err != nil {
-			return nil, &UploadError{Stage: "signed-url", UploadID: plan.UploadID, PartIndex: item.part.Index, Cause: err}
+			return nil, &UploadError{Stage: "signed-url", UploadID: plan.UploadID, PartIndex: item.part.Index, Cause: meta.WrapError("validate QQ upload target", err), Meta: meta}
 		}
 	}
 	concurrency := plan.UploadConfig.Concurrency
@@ -269,15 +331,15 @@ feed:
 	merge := &dto.MediaUploadRequest{UploadID: plan.UploadID}
 	var result *dto.MediaUploadResult
 	if target.Scope == GroupScope {
-		result, _, err = u.api.UploadGroupFile(ctx, target.OpenID, merge)
+		result, meta, err = u.api.UploadGroupFile(ctx, target.OpenID, merge)
 	} else {
-		result, _, err = u.api.UploadC2CFile(ctx, target.OpenID, merge)
+		result, meta, err = u.api.UploadC2CFile(ctx, target.OpenID, merge)
 	}
 	if err != nil {
-		return nil, &UploadError{Stage: "merge", UploadID: plan.UploadID, PartIndex: -1, Cause: err}
+		return nil, &UploadError{Stage: "merge", UploadID: plan.UploadID, PartIndex: -1, Cause: err, Meta: meta}
 	}
-	if result.FileInfo == "" {
-		return nil, &UploadError{Stage: "merge-response", UploadID: plan.UploadID, PartIndex: -1, Cause: errors.New("QQ returned no file_info")}
+	if result == nil || result.FileInfo == "" {
+		return nil, &UploadError{Stage: "merge-response", UploadID: plan.UploadID, PartIndex: -1, Cause: meta.WrapError("validate merged QQ file", errors.New("QQ returned no file_info")), Meta: meta}
 	}
 	return result, nil
 }
@@ -306,13 +368,14 @@ func (u *Uploader) uploadChunk(ctx context.Context, target Target, source io.Rea
 		return &UploadError{Stage: "part-put", UploadID: plan.UploadID, PartIndex: item.part.Index, Cause: err}
 	}
 	request := &dto.UploadPartFinishRequest{UploadID: plan.UploadID, PartIndex: item.part.Index, BlockSize: dto.DecimalInt64(item.size), MD5: hex.EncodeToString(checksum.Sum(nil))}
+	var meta *v1.ResponseMeta
 	if target.Scope == GroupScope {
-		_, err = u.api.FinishGroupUploadPart(ctx, target.OpenID, request)
+		meta, err = u.api.FinishGroupUploadPart(ctx, target.OpenID, request)
 	} else {
-		_, err = u.api.FinishC2CUploadPart(ctx, target.OpenID, request)
+		meta, err = u.api.FinishC2CUploadPart(ctx, target.OpenID, request)
 	}
 	if err != nil {
-		return &UploadError{Stage: "part-confirm", UploadID: plan.UploadID, PartIndex: item.part.Index, Cause: err}
+		return &UploadError{Stage: "part-confirm", UploadID: plan.UploadID, PartIndex: item.part.Index, Cause: err, Meta: meta}
 	}
 	return nil
 }
@@ -338,9 +401,10 @@ func (u *Uploader) putChunk(ctx context.Context, source io.ReaderAt, config dto.
 	window, delay := u.retrySettings(config)
 	retryCtx, stop := context.WithTimeout(ctx, window)
 	defer stop()
+	var last error
 	for attempt := 0; attempt < u.config.MaxPUTAttempts; attempt++ {
 		if err := retryCtx.Err(); err != nil {
-			return err
+			return errors.Join(err, last)
 		}
 		putCtx, cancel := context.WithTimeout(retryCtx, u.config.PUTTimeout)
 		request, err := http.NewRequestWithContext(putCtx, http.MethodPut, item.part.PresignedURL, io.NewSectionReader(source, item.offset, item.size))
@@ -352,27 +416,42 @@ func (u *Uploader) putChunk(ctx context.Context, source io.ReaderAt, config dto.
 		// Deliberately no Authorization, Cookie, X-Union-Appid or QQ request middleware.
 		response, err := u.client.Do(request)
 		retryable := err != nil
+		wait := delay
 		if response != nil {
-			_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64*1024))
+			data, readErr := io.ReadAll(io.LimitReader(response.Body, 64*1024+1))
 			response.Body.Close()
-			if response.StatusCode >= 200 && response.StatusCode < 300 {
+			if err == nil && readErr == nil && response.StatusCode >= 200 && response.StatusCode < 300 {
 				cancel()
 				return nil
 			}
-			retryable = response.StatusCode == 429 || response.StatusCode >= 500
-			err = fmt.Errorf("signed PUT returned HTTP %d", response.StatusCode)
+			retryable = readErr != nil || response.StatusCode == 429 || response.StatusCode >= 500
+			last = putResponseError(response, data, errors.Join(err, readErr))
+			if hint := retryAfter(response.Header); hint > wait {
+				wait = hint
+			}
+		} else {
+			last = err
 		}
 		cancel()
 		if !retryable || attempt+1 == u.config.MaxPUTAttempts {
-			return err
+			return last
 		}
-		timer := time.NewTimer(delay)
-		select {
-		case <-retryCtx.Done():
-			timer.Stop()
-			return retryCtx.Err()
-		case <-timer.C:
+		if err := waitUploadRetry(retryCtx, wait); err != nil {
+			return errors.Join(err, last)
 		}
 	}
-	return errors.New("signed PUT retry budget exhausted")
+	return last
+}
+
+func describeUploadPlan(plan *dto.UploadPrepareResult, meta *v1.ResponseMeta) string {
+	if plan == nil {
+		return "no upload plan was returned"
+	}
+	var fields map[string]json.RawMessage
+	if meta != nil {
+		_ = json.Unmarshal(meta.Raw, &fields)
+	}
+	_, fileInfo := fields["file_info"]
+	_, fileUUID := fields["file_uuid"]
+	return fmt.Sprintf("upload ID present: %t; block size: %d; parts: %d; file_info present: %t; file_uuid present: %t", plan.UploadID != "", plan.BlockSize, len(plan.Parts), fileInfo, fileUUID)
 }
