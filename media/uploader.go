@@ -209,11 +209,17 @@ func uploadLayout(plan *dto.UploadPrepareResult, size int64) ([]chunk, error) {
 	}
 	parts := append([]dto.UploadPart(nil), plan.Parts...)
 	sort.Slice(parts, func(i, j int) bool { return parts[i].Index < parts[j].Index })
+	// QQ may number parts from zero or one. Preserve the platform index for confirmation.
+	firstIndex := parts[0].Index
+	if firstIndex != 0 && firstIndex != 1 {
+		return nil, fmt.Errorf("invalid upload part starting index %d: expected 0 or 1", firstIndex)
+	}
 	result := make([]chunk, 0, len(parts))
 	var offset int64
 	for index, part := range parts {
-		if part.Index != index {
-			return nil, fmt.Errorf("non-contiguous upload parts: expected index %d, received %d", index, part.Index)
+		expectedIndex := firstIndex + index
+		if part.Index != expectedIndex {
+			return nil, fmt.Errorf("non-contiguous upload parts: expected index %d, received %d", expectedIndex, part.Index)
 		}
 		if part.PresignedURL == "" {
 			return nil, fmt.Errorf("upload part %d has no signed URL", part.Index)
