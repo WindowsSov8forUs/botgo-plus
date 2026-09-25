@@ -10,10 +10,11 @@ const HeaderCallbackAppID = "X-Callback-AppID"
 // PutInteraction 更新 interaction
 func (o *openAPI) PutInteraction(ctx context.Context,
 	interactionID string, body string) error {
-	_, err := o.request(ctx).
+	resp, err := o.request(ctx).
 		SetHeader(HeaderCallbackAppID, o.GetAppID()).
 		SetPathParam("interaction_id", interactionID).
 		SetBody(body).
 		Put(o.getURL(interactionsURI))
+	err = responseError(resp, err)
 	return err
 }

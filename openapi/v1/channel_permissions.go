@@ -15,6 +15,7 @@ func (o *openAPI) ChannelPermissions(ctx context.Context, channelID, userID stri
 		SetPathParam("channel_id", channelID).
 		SetPathParam("user_id", userID).
 		Get(o.getURL(channelPermissionsURI))
+	err = responseError(rsp, err)
 	if err != nil {
 		return nil, err
 	}
@@ -29,6 +30,7 @@ func (o *openAPI) ChannelRolesPermissions(ctx context.Context,
 		SetPathParam("channel_id", channelID).
 		SetPathParam("role_id", roleID).
 		Get(o.getURL(channelRolesPermissionsURI))
+	err = responseError(rsp, err)
 	if err != nil {
 		return nil, err
 	}
@@ -48,11 +50,12 @@ func (o *openAPI) PutChannelPermissions(ctx context.Context, channelID, userID s
 			return fmt.Errorf("invalid parameter remove: %v", err)
 		}
 	}
-	_, err := o.request(ctx).
+	resp, err := o.request(ctx).
 		SetPathParam("channel_id", channelID).
 		SetPathParam("user_id", userID).
 		SetBody(p).
 		Put(o.getURL(channelPermissionsURI))
+	err = responseError(resp, err)
 	return err
 }
 
@@ -69,10 +72,11 @@ func (o *openAPI) PutChannelRolesPermissions(ctx context.Context, channelID, rol
 			return fmt.Errorf("invalid parameter remove: %v", err)
 		}
 	}
-	_, err := o.request(ctx).
+	resp, err := o.request(ctx).
 		SetPathParam("channel_id", channelID).
 		SetPathParam("role_id", roleID).
 		SetBody(p).
 		Put(o.getURL(channelRolesPermissionsURI))
+	err = responseError(resp, err)
 	return err
 }

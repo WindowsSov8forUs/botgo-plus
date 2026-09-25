@@ -13,6 +13,7 @@ func (o *openAPI) Me(ctx context.Context) (*dto.User, error) {
 	resp, err := o.request(ctx).
 		SetResult(dto.User{}).
 		Get(o.getURL(userMeURI))
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}
@@ -28,13 +29,14 @@ func (o *openAPI) MeGuilds(ctx context.Context, pager *dto.GuildPager) ([]*dto.G
 	resp, err := o.request(ctx).
 		SetQueryParams(pager.QueryParams()).
 		Get(o.getURL(userMeGuildsURI))
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}
 
 	guilds := make([]*dto.Guild, 0)
 	if err := json.Unmarshal(resp.Body(), &guilds); err != nil {
-		return nil, err
+		return nil, responseError(resp, err)
 	}
 
 	return guilds, nil

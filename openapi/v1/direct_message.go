@@ -16,6 +16,7 @@ func (o *openAPI) CreateDirectMessage(ctx context.Context,
 		SetBody(dm)
 
 	resp, err := baseRequest(ctx, reqCMD, http.MethodPost, o.getURL(userMeDMURI), opt...)
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}
@@ -31,6 +32,7 @@ func (o *openAPI) PostDirectMessage(ctx context.Context,
 		SetBody(msg)
 
 	resp, err := baseRequest(ctx, reqCMD, http.MethodPost, o.getURL(dmsURI), opt...)
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +46,8 @@ func (o *openAPI) RetractDMMessage(ctx context.Context,
 		SetPathParam("guild_id", guildID).
 		SetPathParam("message_id", msgID)
 
-	_, err := baseRequest(ctx, reqCMD, http.MethodDelete, o.getURL(dmsMessageURI), opt...)
+	resp, err := baseRequest(ctx, reqCMD, http.MethodDelete, o.getURL(dmsMessageURI), opt...)
+	err = responseError(resp, err)
 	return err
 }
 
@@ -62,6 +65,7 @@ func (o *openAPI) PostDMSettingGuide(ctx context.Context,
 		SetBody(msg)
 
 	resp, err := baseRequest(ctx, reqCMD, http.MethodPost, o.getURL(dmSettingGuideURI), opt...)
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}

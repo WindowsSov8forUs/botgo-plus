@@ -200,7 +200,7 @@ func (o *openAPI) Do(ctx context.Context, method, path string, body, out interfa
 		}
 	}
 	if err != nil {
-		return meta, err
+		return meta, meta.WrapError("process QQ API response", err)
 	}
 	if out != nil {
 		body := bytes.TrimSpace(meta.Raw)
@@ -210,7 +210,7 @@ func (o *openAPI) Do(ctx context.Context, method, path string, body, out interfa
 			err = fmt.Errorf("decode QQ API response: %w", decodeErr)
 		}
 		if err != nil {
-			return meta, err
+			return meta, meta.WrapError("process QQ API response", err)
 		}
 	}
 	return meta, nil
@@ -280,7 +280,7 @@ func (t *authorizedTransport) RoundTrip(req *http.Request) (*http.Response, erro
 			readErr = errors.New("QQ response exceeds configured size limit")
 		}
 		if readErr != nil {
-			return nil, readErr
+			return nil, errs.NewResponseError("read QQ API response", resp.StatusCode, resp.Header, data, readErr)
 		}
 		resp.Body = io.NopCloser(bytes.NewReader(data))
 		var apiErr *errs.APIError

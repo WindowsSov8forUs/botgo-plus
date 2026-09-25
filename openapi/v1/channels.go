@@ -13,6 +13,7 @@ func (o *openAPI) Channel(ctx context.Context, channelID string) (*dto.Channel, 
 		SetResult(dto.Channel{}).
 		SetPathParam("channel_id", channelID).
 		Get(o.getURL(channelURI))
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}
@@ -25,13 +26,14 @@ func (o *openAPI) Channels(ctx context.Context, guildID string) ([]*dto.Channel,
 	resp, err := o.request(ctx).
 		SetPathParam("guild_id", guildID).
 		Get(o.getURL(channelsURI))
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}
 
 	channels := make([]*dto.Channel, 0)
 	if err := json.Unmarshal(resp.Body(), &channels); err != nil {
-		return nil, err
+		return nil, responseError(resp, err)
 	}
 
 	return channels, nil
@@ -45,6 +47,7 @@ func (o *openAPI) PostChannel(ctx context.Context,
 		SetPathParam("guild_id", guildID).
 		SetBody(value).
 		Post(o.getURL(channelsURI))
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}
@@ -60,6 +63,7 @@ func (o *openAPI) PatchChannel(ctx context.Context,
 		SetPathParam("channel_id", channelID).
 		SetBody(value).
 		Patch(o.getURL(channelURI))
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}
@@ -69,10 +73,11 @@ func (o *openAPI) PatchChannel(ctx context.Context,
 
 // DeleteChannel 删除指定子频道
 func (o *openAPI) DeleteChannel(ctx context.Context, channelID string) error {
-	_, err := o.request(ctx).
+	resp, err := o.request(ctx).
 		SetResult(dto.Channel{}).
 		SetPathParam("channel_id", channelID).
 		Delete(o.getURL(channelURI))
+	err = responseError(resp, err)
 	return err
 }
 
@@ -93,12 +98,13 @@ func (o *openAPI) ListVoiceChannelMembers(ctx context.Context, channelID string)
 	resp, err := o.request(ctx).
 		SetPathParam("channel_id", channelID).
 		Get(o.getURL(voiceChannelMembersURI))
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}
 	members := make([]*dto.Member, 0)
 	if err := json.Unmarshal(resp.Body(), &members); err != nil {
-		return nil, err
+		return nil, responseError(resp, err)
 	}
 	return members, nil
 }

@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/WindowsSov8forUs/botgo-plus/log"
 )
 
 // APIError preserves the platform response. Body may contain user data and must not be logged by default.
@@ -22,7 +24,20 @@ type APIError struct {
 }
 
 func (e *APIError) Error() string {
-	return fmt.Sprintf("QQ API: HTTP %d, code %d, trace %s", e.StatusCode, e.ErrorCode, e.TraceID)
+	if e == nil {
+		return ""
+	}
+	text := fmt.Sprintf("QQ API returned HTTP %d", e.StatusCode)
+	if e.ErrorCode != 0 {
+		text += fmt.Sprintf(" (code %d)", e.ErrorCode)
+	}
+	if e.Message != "" {
+		text += ": " + log.SafeError(errors.New(e.Message))
+	}
+	if e.TraceID != "" {
+		text += ", traceID: " + log.SafeText(e.TraceID)
+	}
+	return text
 }
 
 // PendingError denotes acceptance for asynchronous processing, not successful delivery.

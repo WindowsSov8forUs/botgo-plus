@@ -12,6 +12,7 @@ func (o *openAPI) Guild(ctx context.Context, guildID string) (*dto.Guild, error)
 		SetResult(dto.Guild{}).
 		SetPathParam("guild_id", guildID).
 		Get(o.getURL(guildURI))
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}

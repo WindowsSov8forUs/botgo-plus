@@ -1,7 +1,6 @@
 package log
 
 import (
-	"errors"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -42,17 +41,41 @@ func SafeURL(value string) string {
 }
 
 // SafeError does not change the error returned to the caller.
-func SafeError(err error) string {
+func SafeError(err error) string { return safeError(err, 0) }
+
+func safeError(err error, depth int) string {
 	if err == nil {
 		return ""
 	}
-	var requestError *url.Error
-	if errors.As(err, &requestError) && requestError != nil {
-		reason := "no error details were provided"
-		if requestError.Err != nil {
-			reason = SafeText(requestError.Err.Error())
-		}
-		return SafeText(requestError.Op) + " " + SafeURL(requestError.URL) + ": " + reason
+	if depth >= 16 {
+		return "further error details omitted"
 	}
-	return SafeText(err.Error())
+	var text string
+	switch e := err.(type) {
+	case *url.Error:
+		text = SafeText(e.Op) + " " + SafeURL(e.URL) + ": " + safeError(e.Err, depth+1)
+	case interface{ Unwrap() []error }:
+		var parts []string
+		for _, cause := range e.Unwrap() {
+			if cause != nil {
+				parts = append(parts, safeError(cause, depth+1))
+			}
+		}
+		text = strings.Join(parts, "; ")
+	default:
+		text = SafeText(err.Error())
+		if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+			if cause := wrapped.Unwrap(); cause != nil {
+				detail := safeError(cause, depth+1)
+				if detail != "" && !strings.Contains(text, detail) {
+					text += ": " + detail
+				}
+			}
+		}
+	}
+	runes := []rune(text)
+	if len(runes) > 2048 {
+		return string(runes[:2048]) + "..."
+	}
+	return text
 }

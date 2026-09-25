@@ -11,6 +11,7 @@ func (o *openAPI) WS(ctx context.Context, _ map[string]string, _ string) (*dto.W
 	resp, err := o.request(ctx).
 		SetResult(dto.WebsocketAP{}).
 		Get(o.getURL(gatewayBotURI))
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}

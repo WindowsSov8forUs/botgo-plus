@@ -12,6 +12,7 @@ func (o *openAPI) Roles(ctx context.Context, guildID string) (*dto.GuildRoles, e
 		SetResult(dto.GuildRoles{}).
 		SetPathParam("guild_id", guildID).
 		Get(o.getURL(rolesURI))
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}
@@ -40,6 +41,7 @@ func (o *openAPI) PostRole(ctx context.Context, guildID string, role *dto.Role) 
 		SetResult(dto.UpdateResult{}).
 		SetBody(body).
 		Post(o.getURL(rolesURI))
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}
@@ -68,6 +70,7 @@ func (o *openAPI) PatchRole(ctx context.Context,
 		SetResult(dto.UpdateResult{}).
 		SetBody(body).
 		Patch(o.getURL(roleURI))
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}
@@ -76,9 +79,10 @@ func (o *openAPI) PatchRole(ctx context.Context,
 }
 
 func (o *openAPI) DeleteRole(ctx context.Context, guildID string, roleID dto.RoleID) error {
-	_, err := o.request(ctx).
+	resp, err := o.request(ctx).
 		SetPathParam("guild_id", guildID).
 		SetPathParam("role_id", string(roleID)).
 		Delete(o.getURL(roleURI))
+	err = responseError(resp, err)
 	return err
 }

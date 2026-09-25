@@ -12,6 +12,7 @@ func (o *openAPI) GetMessageSetting(ctx context.Context, guildID string) (*dto.M
 		SetResult(dto.MessageSetting{}).
 		SetPathParam("guild_id", guildID).
 		Get(o.getURL(messageSettingURI))
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}

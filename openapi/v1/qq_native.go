@@ -1,7 +1,9 @@
 package v1
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -62,6 +64,9 @@ func (o *openAPI) GetQQGroupInfo(ctx context.Context, groupID string) (*dto.QQGr
 	if err != nil {
 		return nil, meta, err
 	}
+	if err := validateNativeResult(&result, meta.Raw); err != nil {
+		return nil, meta, meta.WrapError("validate QQ API response", err)
+	}
 	return &result, meta, nil
 }
 func (o *openAPI) GetQQGroupMembers(ctx context.Context, groupID, cursor string) (*dto.QQGroupMembersPage, *ResponseMeta, error) {
@@ -76,6 +81,9 @@ func (o *openAPI) GetQQGroupMembers(ctx context.Context, groupID, cursor string)
 	meta, err := o.Do(ctx, http.MethodGet, path, nil, &result)
 	if err != nil {
 		return nil, meta, err
+	}
+	if err := validateNativeResult(&result, meta.Raw); err != nil {
+		return nil, meta, meta.WrapError("validate QQ API response", err)
 	}
 	return &result, meta, nil
 }
@@ -92,6 +100,9 @@ func (o *openAPI) GetQQGroupMember(ctx context.Context, groupID, memberID string
 	meta, err := o.Do(ctx, http.MethodGet, path, nil, &result)
 	if err != nil {
 		return nil, meta, err
+	}
+	if err := validateNativeResult(&result, meta.Raw); err != nil {
+		return nil, meta, meta.WrapError("validate QQ API response", err)
 	}
 	return &result, meta, nil
 }
@@ -217,6 +228,9 @@ func (o *openAPI) uploadNativeFile(ctx context.Context, path string, r *dto.Medi
 	if err != nil {
 		return nil, meta, err
 	}
+	if err := validateNativeResult(&result, meta.Raw); err != nil {
+		return nil, meta, meta.WrapError("validate QQ API response", err)
+	}
 	return &result, meta, nil
 }
 func (o *openAPI) UploadGroupFile(ctx context.Context, groupID string, r *dto.MediaUploadRequest) (*dto.MediaUploadResult, *ResponseMeta, error) {
@@ -277,4 +291,37 @@ func (o *openAPI) FinishC2CUploadPart(ctx context.Context, userID string, r *dto
 		return nil, err
 	}
 	return o.finishNativePart(ctx, path, r)
+}
+
+// Check only the fields needed to identify a successful result; unknown fields are allowed.
+func validateNativeResult(result any, raw []byte) error {
+	switch value := result.(type) {
+	case *dto.QQGroupInfo:
+		if value.GroupOpenID == "" {
+			return errors.New("QQ group response has no group_openid")
+		}
+	case *dto.QQGroupMember:
+		if value.MemberOpenID == "" {
+			return errors.New("QQ member response has no member_openid")
+		}
+	case *dto.QQGroupMembersPage:
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &fields); err != nil {
+			return err
+		}
+		members := bytes.TrimSpace(fields["members"])
+		if len(members) == 0 || bytes.Equal(members, []byte("null")) {
+			return errors.New("QQ member page has no members array")
+		}
+		for _, member := range value.Members {
+			if member.MemberOpenID == "" {
+				return errors.New("QQ member page contains an entry without member_openid")
+			}
+		}
+	case *dto.MediaUploadResult:
+		if value.FileInfo == "" {
+			return errors.New("QQ file response has no file_info")
+		}
+	}
+	return nil
 }
