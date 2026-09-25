@@ -14,6 +14,7 @@ func (o *openAPI) CreateChannelAnnounces(ctx context.Context, channelID string,
 		SetPathParam("channel_id", channelID).
 		SetBody(announce).
 		Post(o.getURL(channelAnnouncesURI))
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}
@@ -22,21 +23,23 @@ func (o *openAPI) CreateChannelAnnounces(ctx context.Context, channelID string,
 
 // DeleteChannelAnnounces 删除子频道公告,会校验 messageID
 func (o *openAPI) DeleteChannelAnnounces(ctx context.Context, channelID, messageID string) error {
-	_, err := o.request(ctx).
+	resp, err := o.request(ctx).
 		SetResult(dto.Announces{}).
 		SetPathParam("channel_id", channelID).
 		SetPathParam("message_id", messageID).
 		Delete(o.getURL(channelAnnounceURI))
+	err = responseError(resp, err)
 	return err
 }
 
 // CleanChannelAnnounces 删除子频道公告,不校验 messageID
 func (o *openAPI) CleanChannelAnnounces(ctx context.Context, channelID string) error {
-	_, err := o.request(ctx).
+	resp, err := o.request(ctx).
 		SetResult(dto.Announces{}).
 		SetPathParam("channel_id", channelID).
 		SetPathParam("message_id", "all").
 		Delete(o.getURL(channelAnnounceURI))
+	err = responseError(resp, err)
 	return err
 }
 
@@ -48,6 +51,7 @@ func (o *openAPI) CreateGuildAnnounces(ctx context.Context, guildID string,
 		SetPathParam("guild_id", guildID).
 		SetBody(announce).
 		Post(o.getURL(guildAnnouncesURI))
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}
@@ -56,20 +60,22 @@ func (o *openAPI) CreateGuildAnnounces(ctx context.Context, guildID string,
 
 // DeleteGuildAnnounces 删除频道全局公告,会校验 messageID
 func (o *openAPI) DeleteGuildAnnounces(ctx context.Context, guildID, messageID string) error {
-	_, err := o.request(ctx).
+	resp, err := o.request(ctx).
 		SetResult(dto.Announces{}).
 		SetPathParam("guild_id", guildID).
 		SetPathParam("message_id", messageID).
 		Delete(o.getURL(guildAnnounceURI))
+	err = responseError(resp, err)
 	return err
 }
 
 // CleanGuildAnnounces 删除道全局公告,不校验 messageID
 func (o *openAPI) CleanGuildAnnounces(ctx context.Context, guildID string) error {
-	_, err := o.request(ctx).
+	resp, err := o.request(ctx).
 		SetResult(dto.Announces{}).
 		SetPathParam("guild_id", guildID).
 		SetPathParam("message_id", "all").
 		Delete(o.getURL(guildAnnounceURI))
+	err = responseError(resp, err)
 	return err
 }

@@ -192,20 +192,24 @@ func (s *QQBotTokenSource) retrieve(ctx context.Context) (*oauth2.Token, error) 
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024+1))
 	if err != nil {
-		return nil, err
+		return nil, errs.NewResponseError("read QQ token response", resp.StatusCode, resp.Header, data, err)
 	}
 	if len(data) > 1024*1024 {
-		return nil, errors.New("QQ token response too large")
+		return nil, errs.NewResponseError("read QQ token response", resp.StatusCode, resp.Header, data, errors.New("QQ token response too large"))
 	}
 	if err := errs.CheckAPIResponse(resp.StatusCode, resp.Header, data); err != nil {
-		return nil, err
+		var api *errs.APIError
+		if errors.As(err, &api) {
+			return nil, err
+		}
+		return nil, errs.NewResponseError("decode QQ token response", resp.StatusCode, resp.Header, data, err)
 	}
 	var result qqBotTokenRsp
 	if err := json.Unmarshal(data, &result); err != nil {
-		return nil, fmt.Errorf("decode token response: %w", err)
+		return nil, errs.NewResponseError("decode QQ token response", resp.StatusCode, resp.Header, data, err)
 	}
 	if result.AccessToken == "" || result.ExpiresIn <= 0 || result.ExpiresIn > int64(time.Duration(1<<63-1)/time.Second) {
-		return nil, errors.New("invalid token or expiry in QQ response")
+		return nil, errs.NewResponseError("validate QQ token response", resp.StatusCode, resp.Header, data, errors.New("invalid token or expiry in QQ response"))
 	}
 	return &oauth2.Token{AccessToken: result.AccessToken, TokenType: TypeQQBot, ExpiresIn: result.ExpiresIn, Expiry: time.Now().Add(time.Duration(result.ExpiresIn) * time.Second)}, nil
 }

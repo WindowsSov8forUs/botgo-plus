@@ -11,10 +11,11 @@ import (
 
 // GuildMute 频道禁言
 func (o *openAPI) GuildMute(ctx context.Context, guildID string, mute *dto.UpdateGuildMute) error {
-	_, err := o.request(ctx).
+	resp, err := o.request(ctx).
 		SetPathParam("guild_id", guildID).
 		SetBody(mute).
 		Patch(o.getURL(guildMuteURI))
+	err = responseError(resp, err)
 	if err != nil {
 		return err
 	}
@@ -24,11 +25,12 @@ func (o *openAPI) GuildMute(ctx context.Context, guildID string, mute *dto.Updat
 // MemberMute 频道指定成员禁言
 func (o *openAPI) MemberMute(ctx context.Context, guildID, userID string,
 	mute *dto.UpdateGuildMute) error {
-	_, err := o.request(ctx).
+	resp, err := o.request(ctx).
 		SetPathParam("guild_id", guildID).
 		SetPathParam("user_id", userID).
 		SetBody(mute).
 		Patch(o.getURL(guildMembersMuteURI))
+	err = responseError(resp, err)
 	if err != nil {
 		return err
 	}
@@ -46,6 +48,7 @@ func (o *openAPI) MultiMemberMute(ctx context.Context, guildID string,
 		SetBody(mute).
 		SetResult(dto.UpdateGuildMuteResponse{}).
 		Patch(o.getURL(guildMuteURI))
+	err = responseError(rsp, err)
 	if err != nil {
 		return nil, err
 	}

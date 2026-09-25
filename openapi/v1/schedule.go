@@ -14,6 +14,7 @@ func (o *openAPI) ListSchedules(ctx context.Context, channelID string, since uin
 		SetPathParam("channel_id", channelID).
 		SetQueryParam("since", strconv.FormatUint(since, 10)).
 		Get(o.getURL(schedulesURI))
+	err = responseError(rsp, err)
 	if err != nil {
 		return nil, err
 	}
@@ -27,6 +28,7 @@ func (o *openAPI) GetSchedule(ctx context.Context, channelID, scheduleID string)
 		SetPathParam("channel_id", channelID).
 		SetPathParam("schedule_id", scheduleID).
 		Get(o.getURL(scheduleURI))
+	err = responseError(rsp, err)
 	if err != nil {
 		return nil, err
 	}
@@ -40,6 +42,7 @@ func (o *openAPI) CreateSchedule(ctx context.Context, channelID string, schedule
 		SetPathParam("channel_id", channelID).
 		SetBody(dto.ScheduleWrapper{Schedule: schedule}).
 		Post(o.getURL(schedulesURI))
+	err = responseError(rsp, err)
 	if err != nil {
 		return nil, err
 	}
@@ -55,6 +58,7 @@ func (o *openAPI) ModifySchedule(ctx context.Context,
 		SetPathParam("schedule_id", scheduleID).
 		SetBody(dto.ScheduleWrapper{Schedule: schedule}).
 		Patch(o.getURL(scheduleURI))
+	err = responseError(rsp, err)
 	if err != nil {
 		return nil, err
 	}
@@ -63,9 +67,10 @@ func (o *openAPI) ModifySchedule(ctx context.Context,
 
 // DeleteSchedule 删除日程
 func (o *openAPI) DeleteSchedule(ctx context.Context, channelID, scheduleID string) error {
-	_, err := o.request(ctx).
+	resp, err := o.request(ctx).
 		SetPathParam("channel_id", channelID).
 		SetPathParam("schedule_id", scheduleID).
 		Delete(o.getURL(scheduleURI))
+	err = responseError(resp, err)
 	return err
 }

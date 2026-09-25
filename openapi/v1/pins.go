@@ -13,6 +13,7 @@ func (o *openAPI) AddPins(ctx context.Context, channelID string, messageID strin
 		SetPathParam("channel_id", channelID).
 		SetPathParam("message_id", messageID).
 		Put(o.getURL(pinURI))
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}
@@ -21,11 +22,12 @@ func (o *openAPI) AddPins(ctx context.Context, channelID string, messageID strin
 
 // DeletePins 删除精华消息
 func (o *openAPI) DeletePins(ctx context.Context, channelID, messageID string) error {
-	_, err := o.request(ctx).
+	resp, err := o.request(ctx).
 		SetResult(dto.PinsMessage{}).
 		SetPathParam("channel_id", channelID).
 		SetPathParam("message_id", messageID).
 		Delete(o.getURL(pinURI))
+	err = responseError(resp, err)
 	return err
 }
 
@@ -35,6 +37,7 @@ func (o *openAPI) GetPins(ctx context.Context, channelID string) (*dto.PinsMessa
 		SetResult(dto.PinsMessage{}).
 		SetPathParam("channel_id", channelID).
 		Get(o.getURL(pinsURI))
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}
@@ -43,10 +46,11 @@ func (o *openAPI) GetPins(ctx context.Context, channelID string) (*dto.PinsMessa
 
 // CleanPins 清除全部精华消息
 func (o *openAPI) CleanPins(ctx context.Context, channelID string) error {
-	_, err := o.request(ctx).
+	resp, err := o.request(ctx).
 		SetResult(dto.PinsMessage{}).
 		SetPathParam("channel_id", channelID).
 		SetPathParam("message_id", "all").
 		Delete(o.getURL(pinURI))
+	err = responseError(resp, err)
 	return err
 }

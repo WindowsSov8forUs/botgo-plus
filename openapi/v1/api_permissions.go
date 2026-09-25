@@ -12,6 +12,7 @@ func (o *openAPI) GetAPIPermissions(ctx context.Context, guildID string) (*dto.A
 		SetResult(dto.APIPermissions{}).
 		SetPathParam("guild_id", guildID).
 		Get(o.getURL(apiPermissionURI))
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}
@@ -26,6 +27,7 @@ func (o *openAPI) RequireAPIPermissions(ctx context.Context,
 		SetPathParam("guild_id", guildID).
 		SetBody(demand).
 		Post(o.getURL(apiPermissionDemandURI))
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}

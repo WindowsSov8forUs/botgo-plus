@@ -25,6 +25,7 @@ func (o *openAPI) Message(ctx context.Context, channelID string, messageID strin
 		SetPathParam("message_id", messageID)
 
 	resp, err := baseRequest(ctx, reqCMD, http.MethodGet, o.getURL(messagesURI), opt...)
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}
@@ -34,7 +35,7 @@ func (o *openAPI) Message(ctx context.Context, channelID string, messageID strin
 	if result.ID == "" {
 		body := gjson.Get(resp.String(), "message")
 		if err := json.Unmarshal([]byte(body.String()), result); err != nil {
-			return nil, err
+			return nil, responseError(resp, err)
 		}
 	}
 	return result, nil
@@ -51,12 +52,13 @@ func (o *openAPI) Messages(ctx context.Context, channelID string, pager *dto.Mes
 		SetQueryParams(pager.QueryParams())
 
 	resp, err := baseRequest(ctx, reqCMD, http.MethodGet, o.getURL(messagesURI), opt...)
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}
 	messages := make([]*dto.Message, 0)
 	if err := json.Unmarshal(resp.Body(), &messages); err != nil {
-		return nil, err
+		return nil, responseError(resp, err)
 	}
 	return messages, nil
 }
@@ -70,6 +72,7 @@ func (o *openAPI) PostMessage(ctx context.Context, channelID string, msg *dto.Me
 		SetBody(msg)
 
 	resp, err := baseRequest(ctx, reqCMD, http.MethodPost, o.getURL(messagesURI), opt...)
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}
@@ -111,6 +114,7 @@ func (o *openAPI) PostMessageMultipart(ctx context.Context, channelID string, ms
 		SetFormData(form).
 		SetFileReader("file_image", "image", bytes.NewReader(fileImageData))
 	resp, err := baseRequest(ctx, reqCMD, http.MethodPost, o.getURL(messagesURI), opt...)
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}
@@ -127,6 +131,7 @@ func (o *openAPI) PatchMessage(ctx context.Context,
 		SetBody(msg)
 
 	resp, err := baseRequest(ctx, reqCMD, http.MethodPatch, o.getURL(messageURI), opt...)
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}
@@ -141,7 +146,8 @@ func (o *openAPI) RetractMessage(ctx context.Context,
 		SetPathParam("channel_id", channelID).
 		SetPathParam("message_id", string(msgID))
 
-	_, err := baseRequest(ctx, reqCMD, http.MethodDelete, o.getURL(messageURI), opt...)
+	resp, err := baseRequest(ctx, reqCMD, http.MethodDelete, o.getURL(messageURI), opt...)
+	err = responseError(resp, err)
 	return err
 }
 
@@ -151,7 +157,8 @@ func (o *openAPI) RetractC2CMessage(ctx context.Context,
 	reqCMD := o.request(ctx).
 		SetPathParam("user_id", userID).
 		SetPathParam("message_id", msgID)
-	_, err := baseRequest(ctx, reqCMD, http.MethodDelete, o.getURL(retractC2cMessageURI), opt...)
+	resp, err := baseRequest(ctx, reqCMD, http.MethodDelete, o.getURL(retractC2cMessageURI), opt...)
+	err = responseError(resp, err)
 	return err
 }
 
@@ -162,7 +169,8 @@ func (o *openAPI) RetractGroupMessage(ctx context.Context,
 		SetPathParam("group_id", groupID).
 		SetPathParam("message_id", msgID)
 
-	_, err := baseRequest(ctx, reqCMD, http.MethodDelete, o.getURL(retractGroupMessageURI), opt...)
+	resp, err := baseRequest(ctx, reqCMD, http.MethodDelete, o.getURL(retractGroupMessageURI), opt...)
+	err = responseError(resp, err)
 	return err
 }
 
@@ -182,6 +190,7 @@ func (o *openAPI) PostSettingGuide(ctx context.Context,
 		SetBody(msg)
 
 	resp, err := baseRequest(ctx, reqCMD, http.MethodPost, o.getURL(settingGuideURI), opt...)
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}
@@ -212,6 +221,7 @@ func (o *openAPI) PostGroupMessage(ctx context.Context, groupID string, msg dto.
 		SetBody(msg)
 
 	resp, err := baseRequest(ctx, reqCMD, http.MethodPost, o.getURL(getGroupURIBySendType(msg.GetSendType())), opt...)
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}
@@ -242,6 +252,7 @@ func (o *openAPI) PostC2CMessage(ctx context.Context, userID string, msg dto.API
 		SetBody(msg)
 
 	resp, err := baseRequest(ctx, reqCMD, http.MethodPost, o.getURL(getC2CURIBySendType(msg.GetSendType())), opt...)
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}

@@ -14,7 +14,7 @@ import (
 func (r *RedisManager) distributeSession(
 	apInfo *dto.WebsocketAP, tokenSource oauth2.TokenSource, intents *dto.Intent) error {
 	// clear，报错也不影响
-	if err := r.client.Del(context.Background(), r.sessionQueueKey); err != nil {
+	if err := r.client.Del(context.Background(), r.sessionQueueKey).Err(); err != nil {
 		log.Errorf("[ws/session/redis] clear session list failed: %v", err)
 	}
 	for i := uint32(0); i < apInfo.Shards; i++ {

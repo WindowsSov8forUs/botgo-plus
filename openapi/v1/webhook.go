@@ -13,6 +13,7 @@ func (o *openAPI) CreateSession(ctx context.Context, identity dto.HTTPIdentity) 
 		SetResult(dto.HTTPReady{}).
 		SetBody(identity).
 		Post(o.getURL(httpSessionsURI))
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}
@@ -25,13 +26,14 @@ func (o *openAPI) CheckSessions(ctx context.Context) ([]*dto.HTTPSession, error)
 	resp, err := o.request(ctx).
 		SetQueryParam("action", "check").
 		Patch(o.getURL(httpSessionsURI))
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}
 
 	sessions := make([]*dto.HTTPSession, 0)
 	if err := json.Unmarshal(resp.Body(), &sessions); err != nil {
-		return nil, err
+		return nil, responseError(resp, err)
 	}
 
 	return sessions, nil
@@ -41,13 +43,14 @@ func (o *openAPI) CheckSessions(ctx context.Context) ([]*dto.HTTPSession, error)
 func (o *openAPI) SessionList(ctx context.Context) ([]*dto.HTTPSession, error) {
 	resp, err := o.request(ctx).
 		Get(o.getURL(httpSessionsURI))
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}
 
 	sessions := make([]*dto.HTTPSession, 0)
 	if err := json.Unmarshal(resp.Body(), &sessions); err != nil {
-		return nil, err
+		return nil, responseError(resp, err)
 	}
 
 	return sessions, nil
@@ -55,9 +58,10 @@ func (o *openAPI) SessionList(ctx context.Context) ([]*dto.HTTPSession, error) {
 
 // RemoveSession 停止某个 session
 func (o *openAPI) RemoveSession(ctx context.Context, sessionID string) error {
-	_, err := o.request(ctx).
+	resp, err := o.request(ctx).
 		SetPathParam("session_id", sessionID).
 		Delete(o.getURL(httpSessionURI))
+	err = responseError(resp, err)
 	if err != nil {
 		return err
 	}

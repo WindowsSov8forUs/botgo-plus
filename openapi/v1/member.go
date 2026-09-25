@@ -16,12 +16,13 @@ func (o *openAPI) MemberAddRole(
 	if value == nil {
 		value = new(dto.MemberAddRoleBody)
 	}
-	_, err := o.request(ctx).
+	resp, err := o.request(ctx).
 		SetPathParam("guild_id", guildID).
 		SetPathParam("role_id", string(roleID)).
 		SetPathParam("user_id", userID).
 		SetBody(value).
 		Put(o.getURL(memberRoleURI))
+	err = responseError(resp, err)
 	return err
 }
 
@@ -33,12 +34,13 @@ func (o *openAPI) MemberDeleteRole(
 	if value == nil {
 		value = new(dto.MemberAddRoleBody)
 	}
-	_, err := o.request(ctx).
+	resp, err := o.request(ctx).
 		SetPathParam("guild_id", guildID).
 		SetPathParam("role_id", string(roleID)).
 		SetPathParam("user_id", userID).
 		SetBody(value).
 		Delete(o.getURL(memberRoleURI))
+	err = responseError(resp, err)
 	return err
 }
 
@@ -49,6 +51,7 @@ func (o *openAPI) GuildMember(ctx context.Context, guildID, userID string) (*dto
 		SetPathParam("guild_id", guildID).
 		SetPathParam("user_id", userID).
 		Get(o.getURL(guildMemberURI))
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}
@@ -68,13 +71,14 @@ func (o *openAPI) GuildMembers(
 		SetPathParam("guild_id", guildID).
 		SetQueryParams(pager.QueryParams()).
 		Get(o.getURL(guildMembersURI))
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, err
 	}
 
 	members := make([]*dto.Member, 0)
 	if err := json.Unmarshal(resp.Body(), &members); err != nil {
-		return nil, err
+		return nil, responseError(resp, err)
 	}
 
 	return members, nil
@@ -92,6 +96,7 @@ func (o *openAPI) GuildRoleMembers(
 		SetPathParam("role_id", roleID).
 		SetQueryParams(pager.QueryParams()).
 		Get(o.getURL(guildRoleMemberURI))
+	err = responseError(resp, err)
 	if err != nil {
 		return nil, "", err
 	}
@@ -102,7 +107,7 @@ func (o *openAPI) GuildRoleMembers(
 	}
 	var roleMembersRsp res
 	if err := json.Unmarshal(resp.Body(), &roleMembersRsp); err != nil {
-		return nil, "", err
+		return nil, "", responseError(resp, err)
 	}
 
 	return roleMembersRsp.Data, roleMembersRsp.Next, nil
@@ -114,11 +119,12 @@ func (o *openAPI) DeleteGuildMember(ctx context.Context, guildID, userID string,
 	for _, o := range opts {
 		o(opt)
 	}
-	_, err := o.request(ctx).
+	resp, err := o.request(ctx).
 		SetResult(dto.Member{}).
 		SetPathParam("guild_id", guildID).
 		SetPathParam("user_id", userID).
 		SetBody(opt).
 		Delete(o.getURL(guildMemberURI))
+	err = responseError(resp, err)
 	return err
 }

@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/WindowsSov8forUs/botgo-plus/dto"
+	"github.com/WindowsSov8forUs/botgo-plus/errs"
 	"github.com/WindowsSov8forUs/botgo-plus/event"
 	"github.com/WindowsSov8forUs/botgo-plus/interaction/signature"
+	"github.com/WindowsSov8forUs/botgo-plus/log"
 	"github.com/WindowsSov8forUs/botgo-plus/token"
 	"io"
 	"net/http"
@@ -146,8 +148,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 func acceptSafely(ctx context.Context, f EventHandler, p *dto.WSPayload) (err error) {
 	defer func() {
-		if recover() != nil {
-			err = errors.New("QQ event handler panicked")
+		if value := recover(); value != nil {
+			panicErr := errs.NewPanicError(value)
+			err = panicErr
+			log.Errorf("%v", panicErr)
+			log.Debugf("QQ callback panic stack:\n%s", panicErr.Stack)
 		}
 	}()
 	return f(ctx, p)
