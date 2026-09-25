@@ -14,6 +14,7 @@ import (
 	"github.com/WindowsSov8forUs/botgo-plus/dto/message"
 	"github.com/WindowsSov8forUs/botgo-plus/event"
 	"github.com/WindowsSov8forUs/botgo-plus/interaction/webhook"
+	sdklog "github.com/WindowsSov8forUs/botgo-plus/log"
 	"github.com/WindowsSov8forUs/botgo-plus/openapi"
 	"github.com/WindowsSov8forUs/botgo-plus/token"
 	"gopkg.in/yaml.v3"
@@ -29,7 +30,7 @@ func main() {
 	// 初始化新的文件 logger，并使用相对路径来作为日志存放位置，设置最小日志界别为 DebugLevel
 	logger, err := New("./", DebugLevel)
 	if err != nil {
-		log.Fatalln("error log new", err)
+		log.Fatalf("create file logger failed: %s", sdklog.SafeError(err))
 	}
 	// 把新的 logger 设置到 sdk 上，替换掉老的控制台 logger
 	botgo.SetLogger(logger)
@@ -46,7 +47,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel() //释放刷新协程
 	if err = token.StartRefreshAccessToken(ctx, tokenSource); err != nil {
-		log.Fatalln(err)
+		log.Fatalf("start access token refresh failed: %s", sdklog.SafeError(err))
 	}
 	// 初始化 openapi，正式环境
 	api := botgo.NewOpenAPI(credentials.AppID, tokenSource).WithTimeout(5 * time.Second).SetDebug(true)
@@ -56,16 +57,16 @@ func main() {
 		webhook.HTTPHandler(writer, request, credentials)
 	})
 	if err = http.ListenAndServe(fmt.Sprintf("%s:%d", host_, port_), nil); err != nil {
-		log.Fatal("setup server fatal:", err)
+		log.Fatalf("HTTP server stopped: %s", sdklog.SafeError(err))
 	}
 }
 
 // GuildATMessageEventHandler 实现处理 at 消息的回调
 func GuildATMessageEventHandler(api openapi.OpenAPI) event.ATMessageEventHandler {
 	return func(event *dto.WSPayload, data *dto.WSATMessageData) error {
-		log.Printf("[%s] %s", event.Type, data.Content)
+		log.Printf("received %s message: %s", sdklog.SafeText(string(event.Type)), sdklog.SafeText(data.Content))
 		input := strings.ToLower(message.ETLInput(data.Content))
-		log.Printf("clear input content is: %s", input)
+		log.Printf("cleaned input content is: %s", sdklog.SafeText(input))
 		return nil
 	}
 }

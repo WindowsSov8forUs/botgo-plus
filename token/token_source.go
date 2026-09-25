@@ -264,7 +264,16 @@ func StartRefreshAccessToken(ctx context.Context, source oauth2.TokenSource) err
 			tk, err = TokenContext(ctx, source)
 			if err != nil {
 				tk = nil
-				log.Warnf("QQ token refresh failed; retrying in one second")
+				reason := "token endpoint rejected the refresh request"
+				var responseError *oauth2.RetrieveError
+				if errors.As(err, &responseError) {
+					if responseError.Response != nil {
+						reason += fmt.Sprintf(" (HTTP %d)", responseError.Response.StatusCode)
+					}
+				} else {
+					reason = log.SafeError(err)
+				}
+				log.Warnf("refresh access token failed: %s; retrying in one second", reason)
 			}
 		}
 	}()

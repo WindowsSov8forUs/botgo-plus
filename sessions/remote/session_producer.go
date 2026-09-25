@@ -52,7 +52,7 @@ func (r *RedisManager) produce(session dto.Session) error {
 		}
 	}
 	data, err := json.Marshal(session)
-	log.Debug("[ws/session/redis] enqueueing session metadata")
+	log.Debugf("[ws/session/redis] preparing to enqueue session %s", &session)
 	if err != nil {
 		return ErrSessionMarshalFailed
 	}

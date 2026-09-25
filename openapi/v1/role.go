@@ -34,7 +34,7 @@ func (o *openAPI) PostRole(ctx context.Context, guildID string, role *dto.Role) 
 		Filter:  filter,
 		Update:  role,
 	}
-	log.Debug(body)
+	log.Debugf("creating role %q in guild %s", role.Name, log.SafeText(guildID))
 	resp, err := o.request(ctx).
 		SetPathParam("guild_id", guildID).
 		SetResult(dto.UpdateResult{}).

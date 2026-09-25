@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/WindowsSov8forUs/botgo-plus/dto"
+	sdklog "github.com/WindowsSov8forUs/botgo-plus/log"
 	"github.com/WindowsSov8forUs/botgo-plus/openapi"
 )
 
@@ -33,7 +34,7 @@ func (p Processor) ProcessInlineSearch(interaction *dto.WSInteractionData) error
 	}
 	search := &dto.SearchInputResolved{}
 	if err := json.Unmarshal(interaction.Data.Resolved, search); err != nil {
-		log.Println(err)
+		log.Printf("decode inline search request failed: %s", sdklog.SafeError(err))
 		return err
 	}
 	if search.Keyword != "test" {
@@ -58,7 +59,7 @@ func (p Processor) ProcessInlineSearch(interaction *dto.WSInteractionData) error
 	}
 	body, _ := json.Marshal(searchRsp)
 	if err := p.api.PutInteraction(context.Background(), interaction.ID, string(body)); err != nil {
-		log.Println("api call putInteractionInlineSearch  error: ", err)
+		log.Printf("reply to inline search interaction %s failed: %s", sdklog.SafeText(interaction.ID), sdklog.SafeError(err))
 		return err
 	}
 	return nil
@@ -101,7 +102,7 @@ func (p Processor) ProcessC2CMessage(input string, data *dto.WSC2CMessageData) e
 }
 
 func generateDemoMessage(input string, data dto.Message) *dto.MessageToCreate {
-	log.Printf("收到指令: %+v", input)
+	log.Printf("received command: %s", sdklog.SafeText(data.Content))
 	msg := ""
 	if len(input) > 0 {
 		msg += "收到:" + input
@@ -131,12 +132,12 @@ func (p Processor) ProcessFriend(wsEventType string, data *dto.WSC2CFriendData) 
 	var content string
 	switch strings.ToLower(wsEventType) {
 	case strings.ToLower(string(dto.EventC2CFriendAdd)):
-		log.Println("添加好友")
+		log.Printf("user %s added the bot as a friend", sdklog.SafeText(data.OpenID))
 		content = fmt.Sprintf("ID为 %s 的用户添加机器人为好友", data.OpenID)
 	case strings.ToLower(string(dto.EventC2CFriendDel)):
-		log.Println("删除好友")
+		log.Printf("user %s removed the bot from their friends", sdklog.SafeText(data.OpenID))
 	default:
-		log.Println(wsEventType)
+		log.Printf("received unsupported friend event %s", sdklog.SafeText(wsEventType))
 		return nil
 	}
 	replyMsg.Content = content
@@ -146,7 +147,7 @@ func (p Processor) ProcessFriend(wsEventType string, data *dto.WSC2CFriendData) 
 		replyMsg,
 	)
 	if err != nil {
-		log.Println(err)
+		log.Printf("reply to friend event for user %s failed: %s", sdklog.SafeText(data.OpenID), sdklog.SafeError(err))
 		return err
 	}
 	return nil

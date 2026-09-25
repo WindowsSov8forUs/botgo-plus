@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -15,12 +16,13 @@ import (
 	"github.com/WindowsSov8forUs/botgo-plus/dto"
 	"github.com/WindowsSov8forUs/botgo-plus/event"
 	"github.com/WindowsSov8forUs/botgo-plus/interaction/webhook"
+	sdklog "github.com/WindowsSov8forUs/botgo-plus/log"
 	"github.com/WindowsSov8forUs/botgo-plus/token"
 )
 
 func main() {
 	if err := run(); err != nil {
-		slog.Error("QQ webhook stopped", "error", err)
+		slog.Error(fmt.Sprintf("QQ Webhook server stopped: %s", sdklog.SafeError(err)))
 		os.Exit(1)
 	}
 }
@@ -28,13 +30,13 @@ func main() {
 func run() error {
 	credentials := &token.QQBotCredentials{AppID: os.Getenv("QQBOT_APP_ID"), AppSecret: os.Getenv("QQBOT_APP_SECRET")}
 	dispatcher := event.NewDispatcher(func(ctx context.Context, payload *dto.WSPayload) error {
-		slog.Info("received native QQ event", "type", payload.Type, "sequence", payload.Seq)
+		slog.Info(fmt.Sprintf("received native QQ event %s at sequence %d", sdklog.SafeText(string(payload.Type)), payload.Seq))
 		return nil
 	})
 	event.RegisterTyped(dispatcher, dto.EventGroupMessageCreate, func(ctx context.Context, payload *dto.WSPayload, message *dto.WSGroupMessageData) error {
 		// Replace this with a durable enqueue before acknowledging production events.
 		// message.Raw and payload.RawMessage remain available for a separate protocol adapter.
-		slog.Info("received native QQ group message", "message_id", message.ID, "sequence", payload.Seq)
+		slog.Info(fmt.Sprintf("received QQ group message %s at sequence %d", sdklog.SafeText(message.ID), payload.Seq))
 		return nil
 	})
 	handler, err := webhook.NewHandler(credentials, webhook.WithEventHandler(dispatcher.Handle))
@@ -62,7 +64,7 @@ func run() error {
 		defer stop()
 		_ = server.Shutdown(shutdown)
 	}()
-	slog.Info("listening behind an HTTPS reverse proxy", "address", address, "path", "/qqbot")
+	slog.Info(fmt.Sprintf("starting QQ Webhook server on %s at /qqbot; HTTPS must be provided by a reverse proxy", sdklog.SafeText(address)))
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}

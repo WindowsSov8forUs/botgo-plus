@@ -14,6 +14,7 @@ import (
 	"github.com/WindowsSov8forUs/botgo-plus/dto/message"
 	"github.com/WindowsSov8forUs/botgo-plus/event"
 	"github.com/WindowsSov8forUs/botgo-plus/interaction/webhook"
+	sdklog "github.com/WindowsSov8forUs/botgo-plus/log"
 	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
 
@@ -44,7 +45,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel() //释放刷新协程
 	if err = token.StartRefreshAccessToken(ctx, tokenSource); err != nil {
-		log.Fatalln(err)
+		log.Fatalf("start access token refresh failed: %s", sdklog.SafeError(err))
 	}
 	// 初始化 openapi，正式环境
 	api := botgo.NewOpenAPI(credentials.AppID, tokenSource).WithTimeout(5 * time.Second).SetDebug(true)
@@ -55,7 +56,7 @@ func main() {
 		webhook.HTTPHandler(writer, request, credentials)
 	})
 	if err = http.ListenAndServe(fmt.Sprintf("%s:%d", host_, port_), nil); err != nil {
-		log.Fatal("setup server fatal:", err)
+		log.Fatalf("HTTP server stopped: %s", sdklog.SafeError(err))
 	}
 }
 
@@ -67,17 +68,17 @@ func ReqFilter(req *http.Request, _ *http.Response) error {
 
 // RespFilter 自定义响应过滤器
 func RespFilter(req *http.Request, resp *http.Response) error {
-	log.Println("trace id added by req filter", req.Header.Get("X-Custom-TraceID"))
-	log.Println("trace id return by openapi", resp.Header.Get(constant.HeaderTraceID))
+	log.Printf("request filter added trace ID %s", sdklog.SafeText(req.Header.Get("X-Custom-TraceID")))
+	log.Printf("OpenAPI returned trace ID %s", sdklog.SafeText(resp.Header.Get(constant.HeaderTraceID)))
 	return nil
 }
 
 // GuildATMessageEventHandler 实现处理 at 消息的回调
 func GuildATMessageEventHandler(api openapi.OpenAPI) event.ATMessageEventHandler {
 	return func(event *dto.WSPayload, data *dto.WSATMessageData) error {
-		log.Printf("[%s] %s", event.Type, data.Content)
+		log.Printf("received %s message: %s", sdklog.SafeText(string(event.Type)), sdklog.SafeText(data.Content))
 		input := strings.ToLower(message.ETLInput(data.Content))
-		log.Printf("clear input content is: %s", input)
+		log.Printf("cleaned input content is: %s", sdklog.SafeText(input))
 		return nil
 	}
 }

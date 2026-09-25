@@ -83,7 +83,11 @@ func New(appID string, source oauth2.TokenSource, options ...ClientOption) (*Cli
 		trace := resp.Header().Get(constant.HeaderTraceID)
 		api.lastTraceID.Store(trace)
 		if api.debug.Load() {
-			log.Debugf("QQ API %s %s status=%d trace=%s elapsed=%s", resp.Request.Method, resp.Request.RawRequest.URL.Path, resp.StatusCode(), trace, resp.Time())
+			message := fmt.Sprintf("[OPENAPI]%s %s returned %s in %s", resp.Request.Method, log.SafeText(resp.Request.RawRequest.URL.Path), resp.Status(), resp.Time())
+			if trace != "" {
+				message += ", traceID: " + log.SafeText(trace)
+			}
+			log.Debug(message)
 		}
 		if err := openapi.DoRespFilterChains(resp.Request.RawRequest, resp.RawResponse); err != nil {
 			return err
