@@ -314,8 +314,10 @@ func (c *Client) readMessageToQueue() {
 
 func (c *Client) listenMessageAndHandle() {
 	defer func() {
-		if recover() != nil {
-			c.notify(errors.New("QQ event handler panicked"))
+		if value := recover(); value != nil {
+			panicErr := errs.NewPanicError(value)
+			log.Debugf("QQ event handler panic stack:\n%s", panicErr.Stack)
+			c.notify(panicErr)
 		}
 	}()
 	for {
