@@ -115,7 +115,7 @@ func (c *Client) Connect() error {
 	}
 	c.conn = conn
 	c.connMu.Unlock()
-	log.Infof("%s connected", session)
+	log.Infof("%s, url %s, connected", session, log.SafeURL(session.URL))
 	return nil
 }
 
@@ -206,7 +206,11 @@ func (c *Client) Write(message *dto.WSPayload) error {
 		return err
 	}
 	// Never log IDENTIFY/RESUME tokens or raw event bodies.
-	log.Debugf("%s write opcode=%d bytes=%d", c.Session(), message.OPCode, len(data))
+	operation := dto.OPMeans(message.OPCode)
+	if operation == "unknown" {
+		operation = fmt.Sprintf("unknown opcode %d", message.OPCode)
+	}
+	log.Debugf("%s write %s message (%d bytes)", c.Session(), operation, len(data))
 	if err := conn.WriteMessage(wss.TextMessage, data); err != nil {
 		c.notify(err)
 		return err
@@ -346,7 +350,7 @@ func (c *Client) listenMessageAndHandle() {
 			if err != nil {
 				// Preserve upstream behavior: report the application error and continue.
 				// Business retries are not implemented by reconnecting the QQ gateway.
-				log.Errorf("QQ event handler failed: %v", err)
+				log.Errorf("%s event handler failed, %s", c.Session(), log.SafeError(err))
 			}
 			c.saveSeq(payload.Seq)
 		}

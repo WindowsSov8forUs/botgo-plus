@@ -23,7 +23,7 @@ func NewSessionManager() SessionManager {
 // SelectOpenAPIVersion 指定使用哪个版本的 api 实现，如果不指定，sdk将默认使用第一个 setup 的 api 实现
 func SelectOpenAPIVersion(version openapi.APIVersion) error {
 	if _, ok := openapi.VersionMapping[version]; !ok {
-		log.Errorf("version %v openapi not found or setup", version)
+		log.Errorf("openapi version %v was not found or has not been set up", version)
 		return errs.ErrNotFoundOpenAPI
 	}
 	openapi.DefaultImpl = openapi.VersionMapping[version]

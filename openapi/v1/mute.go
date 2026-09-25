@@ -49,6 +49,6 @@ func (o *openAPI) MultiMemberMute(ctx context.Context, guildID string,
 	if err != nil {
 		return nil, err
 	}
-	log.Infof("MultiMemberMute rsp result: %#v", rsp.Result())
+	log.Infof("MultiMemberMute returned HTTP %d for guild %s", rsp.StatusCode(), log.SafeText(guildID))
 	return rsp.Result().(*dto.UpdateGuildMuteResponse), nil
 }

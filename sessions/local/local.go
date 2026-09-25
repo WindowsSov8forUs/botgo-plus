@@ -2,7 +2,6 @@
 package local
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/WindowsSov8forUs/botgo-plus/dto"
@@ -26,7 +25,7 @@ type ChanManager struct {
 func (l *ChanManager) Start(apInfo *dto.WebsocketAP, tokenSource oauth2.TokenSource, intents *dto.Intent) error {
 	defer log.Sync()
 	if err := manager.CheckSessionLimit(apInfo); err != nil {
-		log.Errorf("[ws/session/local] session limited apInfo: %+v", apInfo)
+		log.Errorf("[ws/session/local] session limit reached: need %d sessions, %d remaining", apInfo.Shards, apInfo.SessionStartLimit.Remaining)
 		return err
 	}
 	startInterval := manager.CalcInterval(apInfo.SessionStartLimit.MaxConcurrency)
@@ -72,7 +71,7 @@ func (l *ChanManager) newConnect(session dto.Session) {
 	wsClient := websocket.ClientImpl.New(session)
 	defer wsClient.Close()
 	if err := wsClient.Connect(); err != nil {
-		log.Error(err)
+		log.Errorf("%s, connect err: %s", &session, log.SafeError(err))
 		l.sessionChan <- session // 连接失败，丢回去队列排队重连
 		return
 	}
@@ -99,8 +98,7 @@ func (l *ChanManager) newConnect(session dto.Session) {
 		}
 		// 一些错误不能够鉴权，比如机器人被封禁，这里就直接退出了
 		if manager.CanNotIdentify(err) {
-			msg := fmt.Sprintf("can not identify because server return %+v, so process exit", err)
-			log.Errorf(msg)
+			log.Errorf("[ws/session/local] cannot identify because the server rejected the session: %s", log.SafeError(err))
 			return // Stop this shard instead of recovering a panic and endlessly requeueing a banned bot.
 		}
 		// 将 session 放到 session chan 中，用于启动新的连接，当前连接退出

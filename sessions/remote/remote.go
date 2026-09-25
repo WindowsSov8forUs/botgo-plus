@@ -59,7 +59,7 @@ func (r *RedisManager) Start(apInfo *dto.WebsocketAP, tokenSource oauth2.TokenSo
 	}
 	defer log.Sync()
 	if err := manager.CheckSessionLimit(apInfo); err != nil {
-		log.Errorf("[ws/session/redis] session limited apInfo: %+v", apInfo)
+		log.Errorf("[ws/session/redis] session limit reached: need %d sessions, %d remaining", apInfo.Shards, apInfo.SessionStartLimit.Remaining)
 		return err
 	}
 	startInterval := manager.CalcInterval(apInfo.SessionStartLimit.MaxConcurrency)
@@ -74,7 +74,7 @@ func (r *RedisManager) Start(apInfo *dto.WebsocketAP, tokenSource oauth2.TokenSo
 	ctx := context.Background()
 	distributeLock := lock.New(r.clusterKey, uuid.New().String(), r.client)
 	if err := distributeLock.Lock(ctx, distributeLockExpireTime); err == nil {
-		log.Infof("[ws/session/redis] got distribute lock! i will do distributeSession, key: %s", r.clusterKey)
+		log.Infof("[ws/session/redis] acquired distribution lock %q; distributing sessions", r.clusterKey)
 		// 抢到锁的进行初次分发
 		if err = r.distributeSession(apInfo, tokenSource, intents); err != nil {
 			log.Errorf("[ws/session/redis] distribute sessions failed: %v", err)
@@ -82,7 +82,7 @@ func (r *RedisManager) Start(apInfo *dto.WebsocketAP, tokenSource oauth2.TokenSo
 		}
 		go distributeLock.StartRenew(ctx, distributeLockExpireTime)
 	} else {
-		log.Errorf("got lock failed, err: %v", err)
+		log.Errorf("[ws/session/redis] acquire distribution lock %q failed: %s", r.clusterKey, log.SafeError(err))
 	}
 
 	// 持续 produce session，遇到网络问题在 chan 中重试
@@ -94,21 +94,21 @@ func (r *RedisManager) Start(apInfo *dto.WebsocketAP, tokenSource oauth2.TokenSo
 }
 
 func (r *RedisManager) consume(startInterval time.Duration, source oauth2.TokenSource) error {
-	log.Debug("[ws/session/redis] start consume for session")
+	log.Debug("[ws/session/redis] start consuming sessions")
 	for {
 		// brpop 返回 key value
 		data, err := r.client.BRPop(context.Background(), startInterval*2, r.sessionQueueKey).Result()
 		if err != nil {
 			if err != redis.Nil {
-				log.Errorf("[ws/session/redis] rpop failed, err: %v", err)
+				log.Errorf("[ws/session/redis] BRPOP session failed: %v", err)
 			}
 			continue
 		}
 		if len(data) < 2 {
-			log.Errorf("[ws/session/redis] data is not valid, data: %+v", data)
+			log.Errorf("[ws/session/redis] invalid session queue response: expected a key and value, got %d items", len(data))
 			continue
 		}
-		log.Debug("[ws/session/redis] dequeued session metadata")
+		log.Debug("[ws/session/redis] dequeued a session for processing")
 
 		session := &dto.Session{}
 		if err := json.Unmarshal([]byte(data[1]), session); err != nil {
@@ -119,7 +119,7 @@ func (r *RedisManager) consume(startInterval time.Duration, source oauth2.TokenS
 
 		if owner, ok := source.(interface{ GetAppID() string }); ok {
 			if appID := owner.GetAppID(); appID != "" && session.AppID != "" && appID != session.AppID {
-				log.Error("[ws/session/redis] session belongs to another application")
+				log.Error("[ws/session/redis] discarded a session belonging to another application")
 				continue
 			}
 		}
@@ -158,7 +158,7 @@ func (r *RedisManager) newConnect(session dto.Session) {
 	}
 	wsClient := websocket.ClientImpl.New(session)
 	if err := wsClient.Connect(); err != nil {
-		log.Error(err)
+		log.Errorf("%s, connect err: %s", &session, log.SafeError(err))
 		r.sessionProduceChan <- session // 连接失败，丢回去队列排队重连
 		return
 	}
@@ -184,8 +184,8 @@ func (r *RedisManager) newConnect(session dto.Session) {
 		}
 		// 一些错误不能够鉴权，比如机器人被封禁，这里就直接退出了
 		if manager.CanNotIdentify(err) {
-			msg := fmt.Sprintf("can not identify because server return %+v, so process exit", err)
-			log.Errorf(msg)
+			msg := fmt.Sprintf("[ws/session/remote] cannot identify because the server rejected the session: %s", log.SafeError(err))
+			log.Error(msg)
 			panic(msg) // 当机器人被下架，或者封禁，将不能再连接，所以 panic
 		}
 		// 将 session 放到 session chan 中，用于启动新的连接，释放锁，当前连接退出

@@ -14,6 +14,7 @@ import (
 	"github.com/WindowsSov8forUs/botgo-plus/dto/message"
 	"github.com/WindowsSov8forUs/botgo-plus/event"
 	"github.com/WindowsSov8forUs/botgo-plus/interaction/webhook"
+	sdklog "github.com/WindowsSov8forUs/botgo-plus/log"
 	"github.com/WindowsSov8forUs/botgo-plus/token"
 	"gopkg.in/yaml.v3"
 )
@@ -40,12 +41,12 @@ func main() {
 	if err = yaml.Unmarshal(content, &credentials); err != nil {
 		log.Fatalln("parse config failed, err:", err)
 	}
-	log.Println("credentials:", credentials)
+	log.Printf("loaded credentials for app %s", sdklog.SafeText(credentials.AppID))
 	tokenSource := token.NewQQBotTokenSource(credentials)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel() //释放刷新协程
 	if err = token.StartRefreshAccessToken(ctx, tokenSource); err != nil {
-		log.Fatalln(err)
+		log.Fatalf("start access token refresh failed: %s", sdklog.SafeError(err))
 	}
 	// 初始化 openapi，正式环境
 	api := botgo.NewOpenAPI(credentials.AppID, tokenSource).WithTimeout(5 * time.Second).SetDebug(true)
@@ -64,7 +65,7 @@ func main() {
 		webhook.HTTPHandler(writer, request, credentials)
 	})
 	if err = http.ListenAndServe(fmt.Sprintf("%s:%d", host_, port_), nil); err != nil {
-		log.Fatal("setup server fatal:", err)
+		log.Fatalf("HTTP server stopped: %s", sdklog.SafeError(err))
 	}
 }
 
@@ -79,7 +80,9 @@ func ChannelATMessageEventHandler() event.ATMessageEventHandler {
 // InteractionHandler 处理内联交互事件
 func InteractionHandler() event.InteractionEventHandler {
 	return func(event *dto.WSPayload, data *dto.WSInteractionData) error {
-		fmt.Println(data)
+		if data != nil {
+			fmt.Printf("received interaction %s\n", sdklog.SafeText(data.ID))
+		}
 		return processor.ProcessInlineSearch(data)
 	}
 }
@@ -102,7 +105,9 @@ func C2CMessageEventHandler() event.C2CMessageEventHandler {
 // C2CFriendEventHandler 实现处理好友关系变更的回调
 func C2CFriendEventHandler() event.C2CFriendEventHandler {
 	return func(event *dto.WSPayload, data *dto.WSC2CFriendData) error {
-		fmt.Println(data)
+		if event != nil && data != nil {
+			fmt.Printf("received friend event %s for user %s\n", sdklog.SafeText(string(event.Type)), sdklog.SafeText(data.OpenID))
+		}
 		return processor.ProcessFriend(string(event.Type), data)
 	}
 }
@@ -110,7 +115,9 @@ func C2CFriendEventHandler() event.C2CFriendEventHandler {
 // GuildEventHandler 处理频道事件
 func GuildEventHandler() event.GuildEventHandler {
 	return func(event *dto.WSPayload, data *dto.WSGuildData) error {
-		fmt.Println(data)
+		if event != nil && data != nil {
+			fmt.Printf("received guild event %s for guild %s\n", sdklog.SafeText(string(event.Type)), sdklog.SafeText(data.ID))
+		}
 		return nil
 	}
 }
@@ -118,7 +125,9 @@ func GuildEventHandler() event.GuildEventHandler {
 // ChannelEventHandler 处理子频道事件
 func ChannelEventHandler() event.ChannelEventHandler {
 	return func(event *dto.WSPayload, data *dto.WSChannelData) error {
-		fmt.Println(data)
+		if event != nil && data != nil {
+			fmt.Printf("received channel event %s for channel %s\n", sdklog.SafeText(string(event.Type)), sdklog.SafeText(data.ID))
+		}
 		return nil
 	}
 }
@@ -126,7 +135,9 @@ func ChannelEventHandler() event.ChannelEventHandler {
 // GuildMemberEventHandler 处理成员变更事件
 func GuildMemberEventHandler() event.GuildMemberEventHandler {
 	return func(event *dto.WSPayload, data *dto.WSGuildMemberData) error {
-		fmt.Println(data)
+		if event != nil && data != nil {
+			fmt.Printf("received guild member event %s in guild %s\n", sdklog.SafeText(string(event.Type)), sdklog.SafeText(data.GuildID))
+		}
 		return nil
 	}
 }
@@ -134,7 +145,9 @@ func GuildMemberEventHandler() event.GuildMemberEventHandler {
 // GuildDirectMessageHandler 处理频道私信事件
 func GuildDirectMessageHandler() event.DirectMessageEventHandler {
 	return func(event *dto.WSPayload, data *dto.WSDirectMessageData) error {
-		fmt.Println(data)
+		if data != nil {
+			fmt.Printf("received a direct message in guild channel %s: %s\n", sdklog.SafeText(data.ChannelID), sdklog.SafeText(data.Content))
+		}
 		return nil
 	}
 }
@@ -142,7 +155,9 @@ func GuildDirectMessageHandler() event.DirectMessageEventHandler {
 // GuildMessageHandler 处理消息事件
 func GuildMessageHandler() event.MessageEventHandler {
 	return func(event *dto.WSPayload, data *dto.WSMessageData) error {
-		fmt.Println(data)
+		if data != nil {
+			fmt.Printf("received a message in channel %s: %s\n", sdklog.SafeText(data.ChannelID), sdklog.SafeText(data.Content))
+		}
 		return nil
 	}
 }

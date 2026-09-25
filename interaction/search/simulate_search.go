@@ -56,7 +56,7 @@ func SimulateSearch(config *Config, keyword string) (*dto.SearchRsp, error) {
 	}
 	req.Header.Set(signature.HeaderTimestamp, timestamp)
 	req.Header.Set(signature.HeaderSig, sig)
-	log.Info(req)
+	log.Infof("sending simulated search request to %s", log.SafeURL(config.EndPoint))
 
 	// parse resp
 	client := http.Client{}
@@ -64,7 +64,7 @@ func SimulateSearch(config *Config, keyword string) (*dto.SearchRsp, error) {
 	if err != nil {
 		return nil, err
 	}
-	log.Info(resp)
+	log.Infof("simulated search request returned %s", resp.Status)
 	defer func() {
 		resp.Body.Close()
 	}()
@@ -74,7 +74,7 @@ func SimulateSearch(config *Config, keyword string) (*dto.SearchRsp, error) {
 	if err != nil {
 		return nil, err
 	}
-	log.Info(string(body))
+	log.Infof("read %d bytes from simulated search response", len(body))
 	result := &dto.SearchRsp{}
 	if err = json.Unmarshal(body, result); err != nil {
 		return nil, err
