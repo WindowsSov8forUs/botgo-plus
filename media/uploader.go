@@ -38,11 +38,12 @@ type Target struct {
 
 // Config contains local resource limits, not a statement of QQ account/platform limits.
 type Config struct {
-	MaxConcurrency int
-	MaxFileBytes   int64
-	MaxPUTAttempts int
-	PUTTimeout     time.Duration
-	MaxRetryWindow time.Duration
+	MaxConcurrency     int
+	MaxFileBytes       int64
+	MaxPUTAttempts     int
+	MaxConfirmAttempts int
+	PUTTimeout         time.Duration
+	MaxRetryWindow     time.Duration
 	// HTTPClient must be credential-free. Never pass a QQ-authenticated client here.
 	HTTPClient *http.Client
 	// AllowHTTP is intended for controlled test servers. Production signed uploads use HTTPS.
@@ -68,13 +69,16 @@ func NewUploader(api *v1.Client, config Config) (*Uploader, error) {
 	if config.MaxPUTAttempts == 0 {
 		config.MaxPUTAttempts = 3
 	}
+	if config.MaxConfirmAttempts == 0 {
+		config.MaxConfirmAttempts = 3
+	}
 	if config.PUTTimeout == 0 {
 		config.PUTTimeout = 30 * time.Second
 	}
 	if config.MaxRetryWindow == 0 {
 		config.MaxRetryWindow = 2 * time.Minute
 	}
-	if config.MaxConcurrency < 1 || config.MaxConcurrency > 64 || config.MaxFileBytes < 1 || config.MaxPUTAttempts < 1 || config.MaxPUTAttempts > 20 || config.PUTTimeout <= 0 || config.MaxRetryWindow <= 0 {
+	if config.MaxConcurrency < 1 || config.MaxConcurrency > 64 || config.MaxFileBytes < 1 || config.MaxPUTAttempts < 1 || config.MaxPUTAttempts > 20 || config.MaxConfirmAttempts < 1 || config.MaxConfirmAttempts > 20 || config.PUTTimeout <= 0 || config.MaxRetryWindow <= 0 {
 		return nil, errors.New("invalid media upload limits")
 	}
 	client := &http.Client{}
@@ -368,12 +372,7 @@ func (u *Uploader) uploadChunk(ctx context.Context, target Target, source io.Rea
 		return &UploadError{Stage: "part-put", UploadID: plan.UploadID, PartIndex: item.part.Index, Cause: err}
 	}
 	request := &dto.UploadPartFinishRequest{UploadID: plan.UploadID, PartIndex: item.part.Index, BlockSize: dto.DecimalInt64(item.size), MD5: hex.EncodeToString(checksum.Sum(nil))}
-	var meta *v1.ResponseMeta
-	if target.Scope == GroupScope {
-		meta, err = u.api.FinishGroupUploadPart(ctx, target.OpenID, request)
-	} else {
-		meta, err = u.api.FinishC2CUploadPart(ctx, target.OpenID, request)
-	}
+	meta, err := u.confirmChunk(ctx, target, request, plan.UploadConfig)
 	if err != nil {
 		return &UploadError{Stage: "part-confirm", UploadID: plan.UploadID, PartIndex: item.part.Index, Cause: err, Meta: meta}
 	}
