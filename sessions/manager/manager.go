@@ -2,7 +2,6 @@
 package manager
 
 import (
-	"math"
 	"time"
 
 	"github.com/WindowsSov8forUs/botgo-plus/dto"
@@ -20,18 +19,17 @@ var CanNotIdentifyErrSet = map[int]bool{
 }
 
 // concurrencyTimeWindowSec 并发时间窗口，单位秒
-const concurrencyTimeWindowSec = 2
+const concurrencyTimeWindowSec = 5
 
 // CalcInterval 根据并发要求，计算连接启动间隔
 func CalcInterval(maxConcurrency uint32) time.Duration {
 	if maxConcurrency == 0 {
 		maxConcurrency = 1
 	}
-	f := math.Round(concurrencyTimeWindowSec / float64(maxConcurrency))
-	if f == 0 {
-		f = 1
-	}
-	return time.Duration(f) * time.Second
+	window := time.Duration(concurrencyTimeWindowSec) * time.Second
+	concurrency := time.Duration(maxConcurrency)
+	// Round up so a fractional interval never exceeds QQ's five-second quota.
+	return (window + concurrency - 1) / concurrency
 }
 
 // CanNotResume 是否是不能够 resume 的错误
