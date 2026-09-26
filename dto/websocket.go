@@ -42,6 +42,8 @@ type Session struct {
 	// EventHandler receives this connection's dispatch events, including READY and
 	// RESUMED, after internal session handling. Set it before creating the client;
 	// nil uses the global handlers. Dispatcher.Handle can be assigned directly.
+	// Handlers must honor cancellation. A non-cancellation error stops dispatch without
+	// advancing LastSeq; Listening returns an errs.EventHandlerError for explicit recovery.
 	// Like TokenSource, the handler is runtime state and must be rebound after loading JSON.
 	EventHandler func(context.Context, *WSPayload) error `json:"-"`
 }

@@ -88,6 +88,12 @@ func Error(err error) *Err {
 	if err == nil {
 		return nil
 	}
+	// A callback may already have side effects. Do not let a nested retryable
+	// API error turn an unacknowledged event into unconditional replay.
+	var delivery *EventHandlerError
+	if errors.As(err, &delivery) {
+		return &Err{code: CodeConnCloseCantIdentify, text: delivery.Error()}
+	}
 	var legacy *Err
 	if errors.As(err, &legacy) {
 		return legacy

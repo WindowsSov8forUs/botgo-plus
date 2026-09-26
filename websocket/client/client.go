@@ -46,6 +46,7 @@ type Client struct {
 	lastToken        atomic.Value
 	closed           atomic.Bool
 	listening        atomic.Bool
+	handlerErr       error // Written by the dispatch worker; read only after it exits.
 	closeOnce        sync.Once
 	ctx              context.Context
 	cancel           context.CancelFunc
@@ -126,16 +127,31 @@ func (c *Client) notify(err error) {
 	}
 }
 
-func (c *Client) Listening() error {
+func (c *Client) Listening() (resultErr error) {
 	if c.connection() == nil || c.closed.Load() {
 		return errors.New("QQ connection is not open")
 	}
 	if !c.listening.CompareAndSwap(false, true) {
 		return errors.New("Listening may only be called once")
 	}
-	defer c.Close()
 	go c.readMessageToQueue()
-	go c.listenMessageAndHandle()
+	handlerDone := make(chan struct{})
+	go func() {
+		defer close(handlerDone)
+		c.listenMessageAndHandle()
+	}()
+	defer func() {
+		// Stop dispatch and await the in-flight callback before freezing the resume cursor.
+		c.cancel()
+		<-handlerDone
+		c.Close()
+		if c.handlerErr != nil {
+			resultErr = c.handlerErr
+		}
+		if resultErr != nil && !errors.Is(resultErr, context.Canceled) && event.DefaultHandlers.ErrorNotify != nil {
+			event.DefaultHandlers.ErrorNotify(resultErr)
+		}
+	}()
 	resumeSignal := make(chan os.Signal, 1)
 	if websocket.ResumeSignal >= syscall.SIGHUP {
 		signal.Notify(resumeSignal, websocket.ResumeSignal)
@@ -148,11 +164,7 @@ func (c *Client) Listening() error {
 		case <-resumeSignal:
 			return errs.ErrNeedReConnect
 		case err := <-c.closeChan:
-			err = c.classifyClose(err)
-			if event.DefaultHandlers.ErrorNotify != nil {
-				event.DefaultHandlers.ErrorNotify(err)
-			}
-			return err
+			return c.classifyClose(err)
 		case <-c.heartBeatTicker.C:
 			if err := c.heartbeatTick(); err != nil {
 				return err
@@ -162,20 +174,40 @@ func (c *Client) Listening() error {
 }
 
 func (c *Client) classifyClose(err error) error {
-	if wss.IsCloseError(err, errs.WSCodeBackendBotOffline, errs.WSCodeBackendBotBanned) {
-		return errs.New(errs.CodeConnCloseCantIdentify, "QQ bot is offline or banned")
+	var closed *wss.CloseError
+	if !errors.As(err, &closed) {
+		return err
 	}
-	if wss.IsCloseError(err, errs.WSCodeBackendAuthenticationFail) {
+	var reason string
+	switch closed.Code {
+	case errs.WSCodeBackendUnknownOpCode, errs.WSCodeBackendDecodeError:
+		reason = "QQ gateway rejected the opcode or payload; correct the client before reconnecting"
+	case errs.WSCodeBackendInvalidShard, errs.WSCodeBackendShardingRequired:
+		reason = "QQ gateway rejected the shard configuration; correct the shard assignment before reconnecting"
+	case errs.WSCodeBackendInvalidAPIVersion:
+		reason = "QQ gateway rejected the API version; correct the client before reconnecting"
+	case errs.WSCodeBackendInvalidIntents:
+		reason = "QQ gateway rejected invalid intents; correct the subscriptions before reconnecting"
+	case errs.WSCodeBackendDisallowdIntents:
+		reason = "QQ gateway rejected unauthorized intents; check the application's subscription permissions"
+	case errs.WSCodeBackendBotOffline, errs.WSCodeBackendBotBanned:
+		reason = "QQ bot is offline or banned"
+	case errs.WSCodeBackendRateLimit, errs.WSCodeBackendSessionTimeOut:
+		// Keep the session for Resume; reconnect pacing is owned by the session manager.
+		return err
+	case errs.WSCodeBackendAuthenticationFail:
 		if invalidator, ok := c.Session().TokenSource.(interface{ Invalidate(string) bool }); ok {
 			if rejected, ok := c.lastToken.Load().(string); ok {
 				invalidator.Invalidate(rejected)
 			}
 		}
-		return errs.New(errs.CodeConnCloseCantResume, "QQ gateway rejected authentication")
+		return errors.Join(errs.New(errs.CodeConnCloseCantResume, "QQ gateway rejected authentication"), err)
 	}
-	var closed *wss.CloseError
-	if errors.As(err, &closed) && closed.Code >= 4000 && closed.Code != errs.WSCodeBackendSessionTimeOut {
-		return errs.New(errs.CodeConnCloseCantResume, fmt.Sprintf("QQ gateway close code %d", closed.Code))
+	if reason != "" {
+		return errors.Join(errs.New(errs.CodeConnCloseCantIdentify, reason), err)
+	}
+	if closed.Code >= 4000 {
+		return errors.Join(errs.New(errs.CodeConnCloseCantResume, fmt.Sprintf("QQ gateway close code %d", closed.Code)), err)
 	}
 	return err
 }
@@ -313,11 +345,12 @@ func (c *Client) readMessageToQueue() {
 }
 
 func (c *Client) listenMessageAndHandle() {
+	var activePayload *dto.WSPayload
 	defer func() {
 		if value := recover(); value != nil {
 			panicErr := errs.NewPanicError(value)
 			log.Debugf("QQ event handler panic stack:\n%s", panicErr.Stack)
-			c.notify(panicErr)
+			c.failDispatch(activePayload, panicErr)
 		}
 	}()
 	for {
@@ -334,6 +367,7 @@ func (c *Client) listenMessageAndHandle() {
 			if c.ctx.Err() != nil {
 				return
 			}
+			activePayload = payload
 			// Refresh the snapshot at dispatch time: READY may have been queued before this event.
 			payload.Session = c.Session()
 			ready := payload.Type == "READY"
@@ -350,13 +384,26 @@ func (c *Client) listenMessageAndHandle() {
 				err = event.ParseAndHandle(payload)
 			}
 			if err != nil {
-				// Preserve upstream behavior: report the application error and continue.
-				// Business retries are not implemented by reconnecting the QQ gateway.
-				log.Errorf("%s event handler failed, %s", c.Session(), log.SafeError(err))
+				c.failDispatch(payload, err)
+				return
 			}
 			c.saveSeq(payload.Seq)
 		}
 	}
+}
+
+func (c *Client) failDispatch(payload *dto.WSPayload, cause error) {
+	if c.ctx.Err() != nil && errors.Is(cause, context.Canceled) {
+		return
+	}
+	failure := &errs.EventHandlerError{Cause: cause}
+	if payload != nil {
+		failure.EventType = string(payload.Type)
+		failure.Sequence = payload.Seq
+		failure.Raw = append(json.RawMessage(nil), payload.RawMessage...)
+	}
+	c.handlerErr = failure
+	c.notify(failure)
 }
 
 func (c *Client) saveSeq(seq uint32) {
