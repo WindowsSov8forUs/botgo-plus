@@ -48,7 +48,7 @@ func main() {
 		log.Fatalf("start access token refresh failed: %s", sdklog.SafeError(err))
 	}
 	// 初始化 openapi，正式环境
-	api := botgo.NewOpenAPI(credentials.AppID, tokenSource).WithTimeout(5 * time.Second).SetDebug(true)
+	api := botgo.NewOpenAPI(credentials.AppID, tokenSource).WithTimeout(5 * time.Second)
 	// 根据不同的回调，生成 intents
 	_ = event.RegisterHandlers(GuildATMessageEventHandler(api))
 	// 初始化 openapi，正式环境

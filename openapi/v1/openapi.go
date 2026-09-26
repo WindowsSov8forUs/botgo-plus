@@ -50,7 +50,6 @@ type openAPI struct {
 	tokenSource oauth2.TokenSource
 	baseURL     string
 	lastTraceID atomic.Value
-	debug       atomic.Bool
 	restyClient *resty.Client
 }
 
@@ -82,13 +81,6 @@ func New(appID string, source oauth2.TokenSource, options ...ClientOption) (*Cli
 	api.restyClient.OnAfterResponse(func(_ *resty.Client, resp *resty.Response) error {
 		trace := resp.Header().Get(constant.HeaderTraceID)
 		api.lastTraceID.Store(trace)
-		if api.debug.Load() {
-			message := fmt.Sprintf("[OPENAPI]%s %s returned %s in %s", resp.Request.Method, log.SafeText(resp.Request.RawRequest.URL.Path), resp.Status(), resp.Time())
-			if trace != "" {
-				message += ", traceID: " + log.SafeText(trace)
-			}
-			log.Debug(message)
-		}
 		if err := openapi.DoRespFilterChains(resp.Request.RawRequest, resp.RawResponse); err != nil {
 			return err
 		}
@@ -103,8 +95,65 @@ func New(appID string, source oauth2.TokenSource, options ...ClientOption) (*Cli
 		}
 		return nil
 	})
+	// Log once after response checks, including failures before a response exists.
+	api.restyClient.OnSuccess(func(_ *resty.Client, resp *resty.Response) {
+		logAPIResult(resp.Request, resp, nil)
+	}).OnError(func(request *resty.Request, err error) {
+		var responseErr *resty.ResponseError
+		if errors.As(err, &responseErr) {
+			logAPIResult(request, responseErr.Response, responseErr.Err)
+			return
+		}
+		logAPIResult(request, nil, err)
+	})
 	return api, nil
 }
+
+// API summaries never include headers, query strings or payload bodies.
+// The registered logger decides which levels to display.
+func logAPIResult(request *resty.Request, resp *resty.Response, err error) {
+	method, path := "", "[unknown path]"
+	if request != nil {
+		method = request.Method
+		if request.RawRequest != nil && request.RawRequest.URL != nil {
+			path = request.RawRequest.URL.Path
+		} else if u, parseErr := url.Parse(request.URL); parseErr == nil {
+			path = u.Path
+		}
+	}
+	message := fmt.Sprintf("[OPENAPI]%s %s", log.SafeText(method), log.SafeText(path))
+	trace := ""
+	if resp != nil && resp.RawResponse != nil {
+		message += fmt.Sprintf(" returned %s in %s", log.SafeText(resp.Status()), resp.Time())
+		trace = resp.Header().Get(constant.HeaderTraceID)
+	} else {
+		message += " did not receive a complete response"
+	}
+	if err != nil {
+		message += ": " + log.SafeError(err)
+	}
+	if trace != "" {
+		traceText := "traceID: " + log.SafeText(trace)
+		if !strings.Contains(message, traceText) {
+			message += ", " + traceText
+		}
+	}
+	var pending *errs.PendingError
+	var apiErr *errs.APIError
+	switch {
+	case err == nil, errors.As(err, &pending):
+		// Pending operations were accepted, not delivered or rejected.
+		log.Info(message)
+	case errors.Is(err, context.Canceled):
+		log.Debug(message)
+	case errors.As(err, &apiErr) && apiErr.StatusCode >= 200 && apiErr.StatusCode < 500:
+		// Includes platform error codes returned with HTTP 200 and rate limits.
+		log.Warn(message)
+	default:
+		log.Error(message)
+	}
+}
+
 func Setup()                                   { openapi.Register(openapi.APIv1, &openAPI{}) }
 func (o *openAPI) Version() openapi.APIVersion { return openapi.APIv1 }
 
@@ -137,8 +186,6 @@ func (o *openAPI) WithTimeout(d time.Duration) openapi.OpenAPI {
 	return o
 }
 
-// SetDebug enables metadata only, never secrets or payload bodies.
-func (o *openAPI) SetDebug(b bool) openapi.OpenAPI { o.debug.Store(b); return o }
 func (o *openAPI) GetAppID() string {
 	if o == nil {
 		return ""
@@ -289,6 +336,7 @@ func (t *authorizedTransport) RoundTrip(req *http.Request) (*http.Response, erro
 		invalidator, canInvalidate := t.source.(interface{ Invalidate(string) bool })
 		if attempt == 0 && rejected && canInvalidate && (req.Body == nil || req.GetBody != nil) {
 			resp.Body.Close()
+			log.Warnf("[OPENAPI]%s %s authentication was rejected; refreshing the token and retrying: %s", log.SafeText(req.Method), log.SafeText(req.URL.Path), log.SafeError(classified))
 			invalidator.Invalidate(tk.AccessToken)
 			continue
 		}
