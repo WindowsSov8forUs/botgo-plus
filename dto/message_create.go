@@ -67,7 +67,7 @@ type MessageToCreate struct {
 	Keyboard         *keyboard.MessageKeyboard `json:"keyboard,omitempty"`        // 消息按钮组件
 	EventID          string                    `json:"event_id,omitempty"`        // 要回复的事件id, 逻辑同MsgID
 	Timestamp        int64                     `json:"timestamp,omitempty"`       //TODO delete this
-	MsgSeq           uint32                    `json:"msg_seq,omitempty"`         // 机器人对于回复一个msg_id或者event_id的消息序号，指定后根据这个字段和msg_id或者event_id进行去重
+	MsgSeq           uint32                    `json:"msg_seq"`                   // 机器人对于回复一个msg_id或者event_id的消息序号，指定后根据这个字段和msg_id或者event_id进行去重
 	SubscribeID      string                    `json:"subscribe_id,omitempty"`    // 订阅id，发送订阅消息时使用
 	InputNotify      *InputNotify              `json:"input_notify,omitempty"`    // 输入状态状态信息
 	Media            *MediaInfo                `json:"media,omitempty"`           // 富媒体信息
