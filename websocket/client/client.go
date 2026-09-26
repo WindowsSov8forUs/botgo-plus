@@ -162,20 +162,40 @@ func (c *Client) Listening() error {
 }
 
 func (c *Client) classifyClose(err error) error {
-	if wss.IsCloseError(err, errs.WSCodeBackendBotOffline, errs.WSCodeBackendBotBanned) {
-		return errs.New(errs.CodeConnCloseCantIdentify, "QQ bot is offline or banned")
+	var closed *wss.CloseError
+	if !errors.As(err, &closed) {
+		return err
 	}
-	if wss.IsCloseError(err, errs.WSCodeBackendAuthenticationFail) {
+	var reason string
+	switch closed.Code {
+	case errs.WSCodeBackendUnknownOpCode, errs.WSCodeBackendDecodeError:
+		reason = "QQ gateway rejected the opcode or payload; correct the client before reconnecting"
+	case errs.WSCodeBackendInvalidShard, errs.WSCodeBackendShardingRequired:
+		reason = "QQ gateway rejected the shard configuration; correct the shard assignment before reconnecting"
+	case errs.WSCodeBackendInvalidAPIVersion:
+		reason = "QQ gateway rejected the API version; correct the client before reconnecting"
+	case errs.WSCodeBackendInvalidIntents:
+		reason = "QQ gateway rejected invalid intents; correct the subscriptions before reconnecting"
+	case errs.WSCodeBackendDisallowdIntents:
+		reason = "QQ gateway rejected unauthorized intents; check the application's subscription permissions"
+	case errs.WSCodeBackendBotOffline, errs.WSCodeBackendBotBanned:
+		reason = "QQ bot is offline or banned"
+	case errs.WSCodeBackendRateLimit, errs.WSCodeBackendSessionTimeOut:
+		// Keep the session for Resume; reconnect pacing is owned by the session manager.
+		return err
+	case errs.WSCodeBackendAuthenticationFail:
 		if invalidator, ok := c.Session().TokenSource.(interface{ Invalidate(string) bool }); ok {
 			if rejected, ok := c.lastToken.Load().(string); ok {
 				invalidator.Invalidate(rejected)
 			}
 		}
-		return errs.New(errs.CodeConnCloseCantResume, "QQ gateway rejected authentication")
+		return errors.Join(errs.New(errs.CodeConnCloseCantResume, "QQ gateway rejected authentication"), err)
 	}
-	var closed *wss.CloseError
-	if errors.As(err, &closed) && closed.Code >= 4000 && closed.Code != errs.WSCodeBackendSessionTimeOut {
-		return errs.New(errs.CodeConnCloseCantResume, fmt.Sprintf("QQ gateway close code %d", closed.Code))
+	if reason != "" {
+		return errors.Join(errs.New(errs.CodeConnCloseCantIdentify, reason), err)
+	}
+	if closed.Code >= 4000 {
+		return errors.Join(errs.New(errs.CodeConnCloseCantResume, fmt.Sprintf("QQ gateway close code %d", closed.Code)), err)
 	}
 	return err
 }
