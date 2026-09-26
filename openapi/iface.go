@@ -43,9 +43,6 @@ type Base interface {
 	// WithTimeout 设置请求接口超时时间
 	WithTimeout(duration time.Duration) OpenAPI
 
-	// SetDebug 设置调试模式, 输出更多过程日志
-	SetDebug(debug bool) OpenAPI
-
 	// Transport 透传请求，如果 sdk 没有及时跟进新的接口的变更，可以使用该方法进行透传，openapi 实现时可以按需选择是否实现该接口
 	Transport(ctx context.Context, method, url string, body interface{}) ([]byte, error)
 
